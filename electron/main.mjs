@@ -8,6 +8,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(__dirname, "..");
 const publicDir = resolve(appRoot, "public");
 const preload = resolve(__dirname, "preload.cjs");
+const iconPath = resolve(appRoot, "build", "icon.png");
 const appName = "Auditoria E14";
 const appDescription =
   "App local para inventariar, descargar y auditar metadatos de formularios E14 publicados por la Registraduria.";
@@ -22,6 +23,7 @@ function showAboutDialog() {
     type: "info",
     title: `Acerca de ${appName}`,
     message: appName,
+    icon: iconPath,
     detail: [
       `Version ${app.getVersion()}`,
       appDescription,
@@ -112,6 +114,7 @@ async function createWindow() {
     minWidth: 1024,
     minHeight: 720,
     title: "Auditoria E14",
+    icon: iconPath,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

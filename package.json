@@ -30,6 +30,7 @@
       "electron/**",
       "public/**",
       "scripts/**",
+      "build/icon.png",
       "server.mjs",
       "package.json",
       "!output/**",
@@ -37,20 +38,22 @@
       "!.playwright-mcp/**",
       "!playwright-report/**",
       "!test-results/**",
-      "!*.png",
       "!*.log"
     ],
     "mac": {
+      "icon": "build/icon.icns",
       "target": [
         "dmg"
       ]
     },
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         "nsis"
       ]
     },
     "linux": {
+      "icon": "build/icon.png",
       "target": [
         "AppImage",
         "deb"

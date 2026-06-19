@@ -12,6 +12,9 @@ dist/
 playwright-report/
 test-results/
 *.png
+!logo.png
+!docs/logo.png
+!build/icon.png
 
 # Environment files
 .env

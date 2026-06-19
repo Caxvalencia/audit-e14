@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="Auditoria E14" width="120" />
+</p>
+
 # Auditoria formularios E14 Registraduria
 
 App local para inventariar, descargar y auditar metadatos de formularios E14 publicados por la Registraduria.
