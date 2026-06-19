@@ -154,6 +154,7 @@ function isInsideAny(file, directories) {
 function loadExistingAudits(out, records) {
   const auditFile = join(out, "audit.jsonl");
   const audits = {};
+
   if (!existsSync(auditFile)) {
     return audits;
   }
@@ -174,8 +175,10 @@ function loadExistingAudits(out, records) {
   try {
     const content = readFileSync(auditFile, "utf8");
     const lines = content.split("\n");
+
     for (const line of lines) {
       if (!line.trim()) continue;
+
       const row = JSON.parse(line);
       const key = [
         row.department,
@@ -291,7 +294,8 @@ async function handleApi(req, res, url, context) {
     }
 
     const file = resolve(context.root, requested);
-    const out = url.searchParams.get("out") || context.defaultOut || DEFAULT_OUT;
+    const out =
+      url.searchParams.get("out") || context.defaultOut || DEFAULT_OUT;
     const allowedDirectories = [context.root, resolve(context.root, out)];
 
     if (
@@ -321,11 +325,7 @@ function serveStatic(req, res, url, context) {
 
   const file = resolveInside(context.publicDir, `.${pathname}`);
 
-  if (
-    !file ||
-    !existsSync(file) ||
-    !statSync(file).isFile()
-  ) {
+  if (!file || !existsSync(file) || !statSync(file).isFile()) {
     return notFound(res);
   }
 
