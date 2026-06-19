@@ -14,17 +14,43 @@ Si la fuente cambia de dominio pero conserva la estructura `/assets/temis`, se p
 
 - Node.js con `fetch` nativo. Recomendado: Node 18 o superior.
 - Dependencias instaladas con `pnpm install`.
-- `exiftool` opcional para enriquecer la metadata de PDFs.
 
-Verificar:
+### ExifTool (Extracción de Metadatos)
 
+La aplicación utiliza **ExifTool** para enriquecer la extracción de metadatos de los PDFs descargados.
+
+#### Decisión de Diseño: Opción B (Integración Embebida)
+Para garantizar la portabilidad y asegurar que la herramienta funcione sin configuraciones adicionales ("plug-and-play"), se ha decidido integrar ExifTool directamente dentro del proyecto usando la dependencia de npm `exiftool-vendored` (Opción B). Esto incluye automáticamente los binarios correspondientes para **Windows, macOS y Linux** en `node_modules`, por lo que **no necesitas realizar ninguna instalación adicional en tu sistema**.
+
+#### Opción A: Instalación Manual a Nivel de Sistema (Alternativa)
+Si por cualquier motivo necesitas o prefieres utilizar una instalación de ExifTool propia a nivel de sistema (por ejemplo, para depurar fuera de Node o reducir el peso en otros entornos), puedes realizar la instalación manual siguiendo estos comandos según tu sistema operativo:
+
+* **macOS:**
+  Instalar mediante Homebrew:
+  ```bash
+  brew install exiftool
+  ```
+* **Linux (Debian/Ubuntu):**
+  Instalar desde los repositorios oficiales:
+  ```bash
+  sudo apt update
+  sudo apt install -y exiftool
+  ```
+* **Windows:**
+  Instalar a través de Scoop o Chocolatey:
+  ```bash
+  scoop install exiftool
+  # o bien:
+  choco install exiftool
+  ```
+  *(Alternativamente, puedes descargar el archivo ejecutable oficial `.zip` de [exiftool.org](https://exiftool.org/), renombrar `exiftool(-k).exe` a `exiftool.exe` y guardarlo en una carpeta agregada al `PATH` del sistema).*
+
+Para verificar que esté disponible en tu sistema si decides instalarlo manualmente, puedes ejecutar:
 ```bash
-node --version
-pnpm install
 exiftool -ver
 ```
 
-La extraccion base de metadata se hace con la libreria Node `pdf-lib`, por lo que siempre esta disponible despues de `pnpm install`. Si `exiftool` esta instalado, la herramienta combina la metadata de `pdf-lib` con campos adicionales de `exiftool`.
+La extracción base de metadatos se hace con la librería `pdf-lib` (siempre disponible después de `pnpm install`), y la herramienta la combina automáticamente con la obtenida a través de `exiftool-vendored`.
 
 ## Desplegar en local
 

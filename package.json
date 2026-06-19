@@ -18,6 +18,7 @@
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "dependencies": {
+    "exiftool-vendored": "36.0.0",
     "pdf-lib": "1.17.1"
   },
   "devDependencies": {
@@ -27,6 +28,9 @@
   "build": {
     "appId": "co.local.audit-e14",
     "productName": "Auditoria E14",
+    "asarUnpack": [
+      "node_modules/exiftool-vendored.*/**/*"
+    ],
     "files": [
       "electron/**",
       "public/**",

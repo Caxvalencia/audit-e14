@@ -10,8 +10,38 @@ import {
 import { basename, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { PDFDocument } from "pdf-lib";
+import { ExifTool } from "exiftool-vendored";
 
-const DEFAULT_BASE_URL = "https://divulgacione14presidente.registraduria.gov.co";
+const exiftoolInstanceOptions = {};
+
+if (process.versions.electron) {
+  const isPackaged =
+    !process.defaultApp &&
+    !process.execPath.includes("electron") &&
+    !process.execPath.includes("Electron");
+
+  if (isPackaged) {
+    exiftoolInstanceOptions.exiftoolPath = (platform) => {
+      const vendorPackage =
+        platform === "win32" ? "exiftool-vendored.exe" : "exiftool-vendored.pl";
+      const binaryName = platform === "win32" ? "exiftool.exe" : "exiftool";
+
+      return join(
+        process.resourcesPath,
+        "app.asar.unpacked",
+        "node_modules",
+        vendorPackage,
+        "bin",
+        binaryName,
+      );
+    };
+  }
+}
+
+const exiftool = new ExifTool(exiftoolInstanceOptions);
+
+const DEFAULT_BASE_URL =
+  "https://divulgacione14presidente.registraduria.gov.co";
 const DEFAULT_OUT = "output/e14";
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126 Safari/537.36";
@@ -82,7 +112,10 @@ function rawCacheDir(out, baseUrl = DEFAULT_BASE_URL) {
     return join(out, "raw");
   }
 
-  const key = createHash("sha256").update(normalized).digest("hex").slice(0, 12);
+  const key = createHash("sha256")
+    .update(normalized)
+    .digest("hex")
+    .slice(0, 12);
 
   return join(out, "raw", key);
 }
@@ -445,27 +478,8 @@ async function readMetadata(file, buffer = readFileSync(file)) {
     ...(await readPdfLibMetadata(buffer)),
   };
 
-  if (!commandExists("exiftool")) {
-    return {
-      MetadataSource: "pdf-lib",
-      ...metadata,
-    };
-  }
-
-  const result = spawnSync("exiftool", ["-json", file], { encoding: "utf8" });
-
-  if (result.status !== 0 || !result.stdout.trim()) {
-    return {
-      MetadataSource: "pdf-lib",
-      ...metadata,
-      ExifToolError: String(
-        result.stderr || result.error?.message || "exiftool failed",
-      ).trim(),
-    };
-  }
-
   try {
-    const [exiftoolMetadata] = JSON.parse(result.stdout);
+    const exiftoolMetadata = await exiftool.read(file);
 
     return {
       MetadataSource: "pdf-lib+exiftool",
@@ -593,37 +607,41 @@ Filters:
 }
 
 async function main() {
-  const args = parseArgs(process.argv);
+  try {
+    const args = parseArgs(process.argv);
 
-  if (args.command === "help") return usage();
+    if (args.command === "help") return usage();
 
-  if (!["inventory", "download"].includes(args.command))
-    throw new Error(`Unknown command: ${args.command}`);
+    if (!["inventory", "download"].includes(args.command))
+      throw new Error(`Unknown command: ${args.command}`);
 
-  ensureDir(args.out);
-  const data = await loadData(args.out, args.baseUrl);
-  const records = recordsFromData(data, args);
-  writeInventory(records, args.out);
-  console.log(
-    `Inventory: ${records.length} records -> ${join(args.out, "inventory.csv")}`,
-  );
+    ensureDir(args.out);
+    const data = await loadData(args.out, args.baseUrl);
+    const records = recordsFromData(data, args);
+    writeInventory(records, args.out);
+    console.log(
+      `Inventory: ${records.length} records -> ${join(args.out, "inventory.csv")}`,
+    );
 
-  if (args.command === "inventory") {
-    return;
+    if (args.command === "inventory") {
+      return;
+    }
+
+    const { auditFile, failed } = await runDownload(
+      records,
+      args,
+      ({ done, total }) => {
+        if (done % 25 === 0 || done === total)
+          console.log(`Downloaded/audited ${done}/${total}`);
+      },
+    );
+
+    console.log(`Audit: ${auditFile}`);
+    console.log(`PDF dir: ${join(args.out, "pdf")}`);
+    console.log(`Failures/non-PDF: ${failed}`);
+  } finally {
+    await exiftool.end();
   }
-
-  const { auditFile, failed } = await runDownload(
-    records,
-    args,
-    ({ done, total }) => {
-      if (done % 25 === 0 || done === total)
-        console.log(`Downloaded/audited ${done}/${total}`);
-    },
-  );
-
-  console.log(`Audit: ${auditFile}`);
-  console.log(`PDF dir: ${join(args.out, "pdf")}`);
-  console.log(`Failures/non-PDF: ${failed}`);
 }
 
 export {
