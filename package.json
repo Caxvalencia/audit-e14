@@ -13,7 +13,7 @@
     "check": "node --check server.mjs && node --check scripts/e14-audit.mjs && node --check electron/main.mjs && node --check electron/preload.cjs && node --check electron/run-desktop.cjs && node --check public/app.js"
   },
   "keywords": [],
-  "author": "",
+  "author": "Caxvalencia <caxvalencia@gmail.com>",
   "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
