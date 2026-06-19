@@ -12,6 +12,20 @@ Sitio fuente:
 https://divulgacione14presidente.registraduria.gov.co/home
 ```
 
+## Descargas (Última versión)
+
+Los instaladores y ejecutables son generados automáticamente por el pipeline de GitHub Actions en cada versión.
+
+| Sistema Operativo                                                                                                                       | Formato     | Enlace de Descarga                                                                                                        |
+| :-------------------------------------------------------------------------------------------------------------------------------------- | :---------- | :------------------------------------------------------------------------------------------------------------------------ |
+| <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/apple/apple-original.svg" width="32" height="32" /> **macOS**              | `.dmg`      | [Descargar para macOS](https://github.com/Caxvalencia/audit-e14/releases/latest/download/Auditoria.E14-1.0.0.dmg)         |
+| <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/windows8/windows8-original.svg" width="32" height="32" /> **Windows**      | `.exe`      | [Descargar para Windows](https://github.com/Caxvalencia/audit-e14/releases/latest/download/Auditoria.E14.Setup.1.0.0.exe) |
+| <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/linux/linux-original.svg" width="32" height="32" /> **Linux (AppImage)**   | `.AppImage` | [Descargar AppImage](https://github.com/Caxvalencia/audit-e14/releases/latest/download/Auditoria-E14-1.0.0.AppImage)      |
+| <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/linux/linux-original.svg" width="32" height="32" /> **Linux (Deb/Ubuntu)** | `.deb`      | [Descargar .deb](https://github.com/Caxvalencia/audit-e14/releases/latest/download/Auditoria-E14_1.0.0_amd64.deb)         |
+
+> [!NOTE]
+> Puedes encontrar todos los compilados y versiones previas en la sección de [Releases de GitHub](https://github.com/Caxvalencia/audit-e14/releases).
+
 ## Documentacion
 
 - [Guia de uso](docs/guia-uso.md): instalacion local, interfaz, filtros, limite, hilos, salidas, metadata y CLI.
@@ -61,20 +75,6 @@ pnpm run dist
 ```
 
 La build queda en `dist/`, que esta excluida de Git.
-
-### Descargas (Última versión)
-
-Los instaladores y ejecutables son generados automáticamente por el pipeline de GitHub Actions en cada versión.
-
-| Sistema Operativo                                                                                                                       | Formato     | Enlace de Descarga                                                                                                        |
-| :-------------------------------------------------------------------------------------------------------------------------------------- | :---------- | :------------------------------------------------------------------------------------------------------------------------ |
-| <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/apple/apple-original.svg" width="32" height="32" /> **macOS**              | `.dmg`      | [Descargar para macOS](https://github.com/Caxvalencia/audit-e14/releases/latest/download/Auditoria.E14-1.0.0.dmg)         |
-| <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/windows8/windows8-original.svg" width="32" height="32" /> **Windows**      | `.exe`      | [Descargar para Windows](https://github.com/Caxvalencia/audit-e14/releases/latest/download/Auditoria.E14.Setup.1.0.0.exe) |
-| <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/linux/linux-original.svg" width="32" height="32" /> **Linux (AppImage)**   | `.AppImage` | [Descargar AppImage](https://github.com/Caxvalencia/audit-e14/releases/latest/download/Auditoria-E14-1.0.0.AppImage)      |
-| <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/linux/linux-original.svg" width="32" height="32" /> **Linux (Deb/Ubuntu)** | `.deb`      | [Descargar .deb](https://github.com/Caxvalencia/audit-e14/releases/latest/download/Auditoria-E14_1.0.0_amd64.deb)         |
-
-> [!NOTE]
-> Puedes encontrar todos los compilados y versiones previas en la sección de [Releases de GitHub](https://github.com/Caxvalencia/audit-e14/releases).
 
 ## Uso recomendado
 
