@@ -20,32 +20,35 @@ Si la fuente cambia de dominio pero conserva la estructura `/assets/temis`, se p
 La aplicación utiliza **ExifTool** para enriquecer la extracción de metadatos de los PDFs descargados.
 
 #### Decisión de Diseño: Opción B (Integración Embebida)
+
 Para garantizar la portabilidad y asegurar que la herramienta funcione sin configuraciones adicionales ("plug-and-play"), se ha decidido integrar ExifTool directamente dentro del proyecto usando la dependencia de npm `exiftool-vendored` (Opción B). Esto incluye automáticamente los binarios correspondientes para **Windows, macOS y Linux** en `node_modules`, por lo que **no necesitas realizar ninguna instalación adicional en tu sistema**.
 
 #### Opción A: Instalación Manual a Nivel de Sistema (Alternativa)
+
 Si por cualquier motivo necesitas o prefieres utilizar una instalación de ExifTool propia a nivel de sistema (por ejemplo, para depurar fuera de Node o reducir el peso en otros entornos), puedes realizar la instalación manual siguiendo estos comandos según tu sistema operativo:
 
-* **macOS:**
+- **macOS:**
   Instalar mediante Homebrew:
   ```bash
   brew install exiftool
   ```
-* **Linux (Debian/Ubuntu):**
+- **Linux (Debian/Ubuntu):**
   Instalar desde los repositorios oficiales:
   ```bash
   sudo apt update
   sudo apt install -y exiftool
   ```
-* **Windows:**
+- **Windows:**
   Instalar a través de Scoop o Chocolatey:
   ```bash
   scoop install exiftool
   # o bien:
   choco install exiftool
   ```
-  *(Alternativamente, puedes descargar el archivo ejecutable oficial `.zip` de [exiftool.org](https://exiftool.org/), renombrar `exiftool(-k).exe` a `exiftool.exe` y guardarlo en una carpeta agregada al `PATH` del sistema).*
+  _(Alternativamente, puedes descargar el archivo ejecutable oficial `.zip` de [exiftool.org](https://exiftool.org/), renombrar `exiftool(-k).exe` a `exiftool.exe` y guardarlo en una carpeta agregada al `PATH` del sistema)._
 
 Para verificar que esté disponible en tu sistema si decides instalarlo manualmente, puedes ejecutar:
+
 ```bash
 exiftool -ver
 ```
@@ -57,7 +60,7 @@ La extracción base de metadatos se hace con la librería `pdf-lib` (siempre dis
 Desde la carpeta del proyecto:
 
 ```bash
-cd /Users/cax/Desktop/formularios-e-14
+cd /audit-e-14
 pnpm install
 node server.mjs
 ```
