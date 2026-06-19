@@ -210,12 +210,15 @@ async function loadConfig() {
   const res = await fetch("/api/config");
 
   if (!res.ok) {
-    throw new Error((await res.json()).error || "No se pudo cargar configuracion");
+    throw new Error(
+      (await res.json()).error || "No se pudo cargar configuracion",
+    );
   }
 
   const config = await res.json();
   state.defaultBaseUrl = normalizeBaseUrl(config.defaultBaseUrl);
-  els.baseUrl.value = localStorage.getItem(BASE_URL_STORAGE_KEY) || state.defaultBaseUrl;
+  els.baseUrl.value =
+    localStorage.getItem(BASE_URL_STORAGE_KEY) || state.defaultBaseUrl;
 
   if (config.defaultOut) {
     els.out.value = config.defaultOut;
@@ -558,28 +561,49 @@ function formatMetaValue(value) {
 
   if (typeof value === "object") {
     // Check if it's an ExifDateTime or has all date/time fields
-    if (value._ctor === "ExifDateTime" || (value.year !== undefined && value.month !== undefined && value.day !== undefined && value.hour !== undefined)) {
+    if (
+      value._ctor === "ExifDateTime" ||
+      (value.year !== undefined &&
+        value.month !== undefined &&
+        value.day !== undefined &&
+        value.hour !== undefined)
+    ) {
       const dateStr = `${value.year}-${String(value.month).padStart(2, "0")}-${String(value.day).padStart(2, "0")}`;
       const timeStr = `${String(value.hour).padStart(2, "0")}:${String(value.minute).padStart(2, "0")}:${String(value.second).padStart(2, "0")}`;
-      const tz = value.zoneName 
-        ? ` ${value.zoneName}` 
-        : (value.tzoffsetMinutes !== undefined 
-            ? (value.tzoffsetMinutes === 0 ? " UTC" : ` UTC${value.tzoffsetMinutes > 0 ? "+" : ""}${value.tzoffsetMinutes / 60}`)
-            : "");
+      const tz = value.zoneName
+        ? ` ${value.zoneName}`
+        : value.tzoffsetMinutes !== undefined
+          ? value.tzoffsetMinutes === 0
+            ? " UTC"
+            : ` UTC${value.tzoffsetMinutes > 0 ? "+" : ""}${value.tzoffsetMinutes / 60}`
+          : "";
+
       return `${dateStr} ${timeStr}${tz}`;
     }
+
     // Check if it's an ExifDate
-    if (value._ctor === "ExifDate" || (value.year !== undefined && value.month !== undefined && value.day !== undefined)) {
+    if (
+      value._ctor === "ExifDate" ||
+      (value.year !== undefined &&
+        value.month !== undefined &&
+        value.day !== undefined)
+    ) {
       return `${value.year}-${String(value.month).padStart(2, "0")}-${String(value.day).padStart(2, "0")}`;
     }
+
     // Check if it's an ExifTime
-    if (value._ctor === "ExifTime" || (value.hour !== undefined && value.minute !== undefined)) {
+    if (
+      value._ctor === "ExifTime" ||
+      (value.hour !== undefined && value.minute !== undefined)
+    ) {
       return `${String(value.hour).padStart(2, "0")}:${String(value.minute).padStart(2, "0")}:${String(value.second).padStart(2, "0")}`;
     }
+
     // Fallback to rawValue if present
     if (value.rawValue) {
       return String(value.rawValue);
     }
+
     return JSON.stringify(value);
   }
 
@@ -619,7 +643,47 @@ function setProgress(label, done, total) {
   els.progressBar.style.width = `${pct}%`;
 }
 
+function getFilteredTablesCount() {
+  if (!state.catalog) return 0;
+
+  const depCode = els.department.value;
+  const munCode = els.municipality.value;
+  const zoneCode = els.zone.value;
+  const standCode = els.stand.value;
+
+  let total = 0;
+
+  for (const dep of state.catalog.departments) {
+    if (depCode && dep.code !== depCode) continue;
+    for (const mun of dep.municipalities) {
+      if (munCode && mun.code !== munCode) continue;
+      for (const zone of mun.zones) {
+        if (zoneCode && zone.code !== zoneCode) continue;
+        for (const stand of zone.stands) {
+          if (standCode && stand.code !== standCode) continue;
+          total += stand.countTable || 0;
+        }
+      }
+    }
+  }
+
+  return total;
+}
+
 async function downloadAudit() {
+  const count = getFilteredTablesCount();
+  const limit = Number(els.limit.value || 0);
+  const actualCount = limit > 0 ? Math.min(count, limit) : count;
+
+  if (actualCount > 2000) {
+    const confirmDownload = confirm(
+      `¡Atención! Estás a punto de descargar y auditar ${formatNumber(actualCount)} formularios E14.\n\nEsta operación puede tardar bastante tiempo y consumir una cantidad significativa de ancho de banda y almacenamiento.\n\n¿Estás seguro de que deseas continuar?`
+    );
+    if (!confirmDownload) {
+      return;
+    }
+  }
+
   setBusy(true, "Descargando");
   state.downloadController = new AbortController();
   state.audits.clear();
@@ -869,10 +933,12 @@ els.downloadBtn.addEventListener("click", downloadAudit);
 els.configBtn.addEventListener("click", openConfig);
 els.closeConfigBtn.addEventListener("click", closeConfig);
 els.configDialog.addEventListener("close", () => {
-  els.baseUrl.value = localStorage.getItem(BASE_URL_STORAGE_KEY) || state.defaultBaseUrl;
+  els.baseUrl.value =
+    localStorage.getItem(BASE_URL_STORAGE_KEY) || state.defaultBaseUrl;
 });
 els.configDialog.addEventListener("cancel", () => {
-  els.baseUrl.value = localStorage.getItem(BASE_URL_STORAGE_KEY) || state.defaultBaseUrl;
+  els.baseUrl.value =
+    localStorage.getItem(BASE_URL_STORAGE_KEY) || state.defaultBaseUrl;
 });
 els.configForm.addEventListener("submit", saveConfig);
 els.resetBaseUrlBtn.addEventListener("click", resetBaseUrl);
@@ -915,7 +981,9 @@ els.lastPage.addEventListener("click", () => {
 
 els.out.addEventListener("change", loadCatalog);
 
-loadConfig().then(loadCatalog).catch((error) => {
-  setStatus("Error", "error");
-  showError(error);
-});
+loadConfig()
+  .then(loadCatalog)
+  .catch((error) => {
+    setStatus("Error", "error");
+    showError(error);
+  });
