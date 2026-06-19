@@ -13,18 +13,18 @@ Si la fuente cambia de dominio pero conserva la estructura `/assets/temis`, se p
 ## Requisitos
 
 - Node.js con `fetch` nativo. Recomendado: Node 18 o superior.
-- Dependencias npm instaladas con `npm install`.
+- Dependencias instaladas con `pnpm install`.
 - `exiftool` opcional para enriquecer la metadata de PDFs.
 
 Verificar:
 
 ```bash
 node --version
-npm install
+pnpm install
 exiftool -ver
 ```
 
-La extraccion base de metadata se hace con la libreria Node `pdf-lib`, por lo que siempre esta disponible despues de `npm install`. Si `exiftool` esta instalado, la herramienta combina la metadata de `pdf-lib` con campos adicionales de `exiftool`.
+La extraccion base de metadata se hace con la libreria Node `pdf-lib`, por lo que siempre esta disponible despues de `pnpm install`. Si `exiftool` esta instalado, la herramienta combina la metadata de `pdf-lib` con campos adicionales de `exiftool`.
 
 ## Desplegar en local
 
@@ -32,7 +32,7 @@ Desde la carpeta del proyecto:
 
 ```bash
 cd /Users/cax/Desktop/formularios-e-14
-npm install
+pnpm install
 node server.mjs
 ```
 

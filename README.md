@@ -22,7 +22,7 @@ https://divulgacione14presidente.registraduria.gov.co/home
 Desde esta carpeta:
 
 ```bash
-npm install
+pnpm install
 node server.mjs
 ```
 
@@ -45,19 +45,19 @@ La app tambien puede ejecutarse con Electron. Usa el mismo motor local de invent
 Modo desarrollo:
 
 ```bash
-npm run desktop
+pnpm run desktop
 ```
 
 Build local sin instalador:
 
 ```bash
-npm run pack
+pnpm run pack
 ```
 
 Distribuible:
 
 ```bash
-npm run dist
+pnpm run dist
 ```
 
 La build queda en `dist/`, que esta excluida de Git.
