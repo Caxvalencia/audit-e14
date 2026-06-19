@@ -216,6 +216,10 @@ async function loadConfig() {
   const config = await res.json();
   state.defaultBaseUrl = normalizeBaseUrl(config.defaultBaseUrl);
   els.baseUrl.value = localStorage.getItem(BASE_URL_STORAGE_KEY) || state.defaultBaseUrl;
+
+  if (config.defaultOut) {
+    els.out.value = config.defaultOut;
+  }
 }
 
 function openConfig() {

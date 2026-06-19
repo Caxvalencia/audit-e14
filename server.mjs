@@ -64,9 +64,9 @@ function readBody(req) {
   });
 }
 
-function argsFromQuery(params) {
+function argsFromQuery(params, context) {
   return {
-    out: params.get("out") || DEFAULT_OUT,
+    out: params.get("out") || (context && context.defaultOut) || DEFAULT_OUT,
     baseUrl: normalizeBaseUrl(params.get("baseUrl") || DEFAULT_BASE_URL),
     department: params.get("department")
       ? pad(params.get("department"), 2)
@@ -87,9 +87,9 @@ function argsFromQuery(params) {
   };
 }
 
-function argsFromBody(body) {
+function argsFromBody(body, context) {
   return {
-    out: body.out || DEFAULT_OUT,
+    out: body.out || (context && context.defaultOut) || DEFAULT_OUT,
     baseUrl: normalizeBaseUrl(body.baseUrl || DEFAULT_BASE_URL),
     department: body.department ? pad(body.department, 2) : null,
     municipality: body.municipality ? pad(body.municipality, 3) : null,
@@ -153,13 +153,16 @@ function isInsideAny(file, directories) {
 
 async function handleApi(req, res, url, context) {
   if (req.method === "GET" && url.pathname === "/api/config") {
-    json(res, 200, { defaultBaseUrl: DEFAULT_BASE_URL });
+    json(res, 200, {
+      defaultBaseUrl: DEFAULT_BASE_URL,
+      defaultOut: context.defaultOut,
+    });
 
     return;
   }
 
   if (req.method === "GET" && url.pathname === "/api/catalog") {
-    const args = argsFromQuery(url.searchParams);
+    const args = argsFromQuery(url.searchParams, context);
     const data = await loadData(args.out, args.baseUrl);
 
     json(res, 200, buildCatalog(data));
@@ -168,7 +171,7 @@ async function handleApi(req, res, url, context) {
   }
 
   if (req.method === "GET" && url.pathname === "/api/inventory") {
-    const args = argsFromQuery(url.searchParams);
+    const args = argsFromQuery(url.searchParams, context);
     const data = await loadData(args.out, args.baseUrl);
     const records = recordsFromData(data, args);
 
@@ -189,7 +192,7 @@ async function handleApi(req, res, url, context) {
 
   if (req.method === "POST" && url.pathname === "/api/download") {
     const body = await readBody(req);
-    const args = argsFromBody(body);
+    const args = argsFromBody(body, context);
     const controller = new AbortController();
 
     req.on("close", () => {
@@ -240,7 +243,7 @@ async function handleApi(req, res, url, context) {
     }
 
     const file = resolve(context.root, requested);
-    const out = url.searchParams.get("out") || DEFAULT_OUT;
+    const out = url.searchParams.get("out") || context.defaultOut || DEFAULT_OUT;
     const allowedDirectories = [context.root, resolve(context.root, out)];
 
     if (
@@ -290,10 +293,12 @@ function startServer({
   publicDir = DEFAULT_PUBLIC,
   port = DEFAULT_PORT,
   host,
+  defaultOut,
 } = {}) {
   const context = {
     root: resolve(root),
     publicDir: resolve(publicDir),
+    defaultOut: defaultOut || resolve(root, "output/e14"),
   };
 
   const server = createServer(async (req, res) => {

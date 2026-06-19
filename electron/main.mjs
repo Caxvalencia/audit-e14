@@ -1,5 +1,5 @@
 import electron from "electron";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startServer } from "../server.mjs";
 
@@ -106,6 +106,7 @@ async function createWindow() {
     publicDir,
     port: 0,
     host: "127.0.0.1",
+    defaultOut: join(app.getPath("documents"), "audit-e14"),
   });
 
   mainWindow = new BrowserWindow({
