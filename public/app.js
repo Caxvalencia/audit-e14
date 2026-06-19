@@ -552,7 +552,34 @@ function formatMetaValue(value) {
     return "—";
   }
 
+  if (Array.isArray(value)) {
+    return value.length > 0 ? value.join(", ") : "—";
+  }
+
   if (typeof value === "object") {
+    // Check if it's an ExifDateTime or has all date/time fields
+    if (value._ctor === "ExifDateTime" || (value.year !== undefined && value.month !== undefined && value.day !== undefined && value.hour !== undefined)) {
+      const dateStr = `${value.year}-${String(value.month).padStart(2, "0")}-${String(value.day).padStart(2, "0")}`;
+      const timeStr = `${String(value.hour).padStart(2, "0")}:${String(value.minute).padStart(2, "0")}:${String(value.second).padStart(2, "0")}`;
+      const tz = value.zoneName 
+        ? ` ${value.zoneName}` 
+        : (value.tzoffsetMinutes !== undefined 
+            ? (value.tzoffsetMinutes === 0 ? " UTC" : ` UTC${value.tzoffsetMinutes > 0 ? "+" : ""}${value.tzoffsetMinutes / 60}`)
+            : "");
+      return `${dateStr} ${timeStr}${tz}`;
+    }
+    // Check if it's an ExifDate
+    if (value._ctor === "ExifDate" || (value.year !== undefined && value.month !== undefined && value.day !== undefined)) {
+      return `${value.year}-${String(value.month).padStart(2, "0")}-${String(value.day).padStart(2, "0")}`;
+    }
+    // Check if it's an ExifTime
+    if (value._ctor === "ExifTime" || (value.hour !== undefined && value.minute !== undefined)) {
+      return `${String(value.hour).padStart(2, "0")}:${String(value.minute).padStart(2, "0")}:${String(value.second).padStart(2, "0")}`;
+    }
+    // Fallback to rawValue if present
+    if (value.rawValue) {
+      return String(value.rawValue);
+    }
     return JSON.stringify(value);
   }
 
