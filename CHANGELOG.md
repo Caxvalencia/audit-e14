@@ -2,7 +2,7 @@
 
 Todos los cambios relevantes del proyecto se documentan en este archivo.
 
-## Proxima version
+## 1.1.0 - 2026-06-19
 
 ### Agregado
 
