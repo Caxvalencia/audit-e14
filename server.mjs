@@ -13,6 +13,7 @@ import {
   pad,
   recordsFromData,
   runDownload,
+  runVerification,
   writeInventory,
 } from "./scripts/e14-audit.mjs";
 
@@ -271,6 +272,54 @@ async function handleApi(req, res, url, context) {
     const result = await runDownload(records, args, (event) => {
       if (!res.destroyed && !res.writableEnded)
         res.write(JSON.stringify(event) + "\n");
+    });
+
+    if (!res.destroyed && !res.writableEnded) {
+      res.write(
+        JSON.stringify({
+          type: result.canceled ? "canceled" : "complete",
+          ...result,
+        }) + "\n",
+      );
+      res.end();
+    }
+
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/verify") {
+    const body = await readBody(req);
+    const args = argsFromBody(body, context);
+    const controller = new AbortController();
+
+    req.on("close", () => {
+      if (!res.writableEnded) {
+        controller.abort();
+      }
+    });
+
+    args.signal = controller.signal;
+    const data = await loadData(args.out, args.baseUrl);
+    const records = recordsFromData(data, args);
+
+    res.writeHead(200, {
+      "content-type": "application/x-ndjson; charset=utf-8",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+    });
+
+    res.write(
+      JSON.stringify({
+        type: "start",
+        summary: summarize(records),
+        total: records.length,
+      }) + "\n",
+    );
+
+    const result = await runVerification(records, args, (event) => {
+      if (!res.destroyed && !res.writableEnded) {
+        res.write(JSON.stringify(event) + "\n");
+      }
     });
 
     if (!res.destroyed && !res.writableEnded) {

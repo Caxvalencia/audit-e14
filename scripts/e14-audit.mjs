@@ -3,12 +3,15 @@ import { createHash } from "node:crypto";
 import {
   createWriteStream,
   existsSync,
+  mkdtempSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { PDFDocument } from "pdf-lib";
 import { ExifTool } from "exiftool-vendored";
 
@@ -426,11 +429,73 @@ async function downloadOne(record, out, args) {
   };
 }
 
+async function fetchRemotePdf(record, args) {
+  const res = await fetchWithRetry(`${record.pdfUrl}?uuid=${Date.now()}`, {
+    signal: args.signal,
+  });
+
+  return Buffer.from(await res.arrayBuffer());
+}
+
+async function verifyOne(record, out, args) {
+  assertNotAborted(args.signal);
+  const file = localPdfPath(out, record);
+
+  if (!existsSync(file)) {
+    throw new Error(`Local PDF not found: ${file}`);
+  }
+
+  const localBuffer = readFileSync(file);
+  const remoteBuffer = await fetchRemotePdf(record, args);
+  assertNotAborted(args.signal);
+
+  const localSha256 = createHash("sha256").update(localBuffer).digest("hex");
+  const remoteSha256 = createHash("sha256").update(remoteBuffer).digest("hex");
+  const localMetadata = args.metadata
+    ? await readMetadata(file, localBuffer)
+    : {};
+  const remoteMetadata = args.metadata
+    ? await readMetadataFromBuffer(remoteBuffer, record.expectedName)
+    : {};
+  const metadataDiff = args.metadata
+    ? diffMetadata(localMetadata, remoteMetadata)
+    : [];
+  const checksumOk = localSha256 === remoteSha256;
+  const metadataOk = !args.metadata || metadataDiff.length === 0;
+  const ok = checksumOk && metadataOk;
+
+  return {
+    ...record,
+    localPath: file,
+    downloaded: false,
+    verified: true,
+    ok,
+    bytes: localBuffer.length,
+    sha256: localSha256,
+    pdfHeader: localBuffer
+      .subarray(0, 12)
+      .toString("latin1")
+      .replace(/\s+/g, " "),
+    metadata: localMetadata,
+    verification: {
+      verifiedAt: new Date().toISOString(),
+      localSha256,
+      remoteSha256,
+      checksumOk,
+      metadataOk,
+      remoteBytes: remoteBuffer.length,
+      metadataDiff,
+      remoteMetadata,
+    },
+  };
+}
+
 async function runDownload(records, args, onRow = () => {}) {
   ensureDir(args.out);
   writeInventory(records, args.out);
   const auditFile = join(args.out, "audit.jsonl");
   writeFileSync(auditFile, "");
+
   let done = 0;
   let failed = 0;
 
@@ -472,6 +537,59 @@ async function runDownload(records, args, onRow = () => {}) {
   return { auditFile, failed, total: records.length, done, canceled: false };
 }
 
+async function runVerification(records, args, onRow = () => {}) {
+  ensureDir(args.out);
+  writeInventory(records, args.out);
+
+  const auditFile = join(args.out, "audit.jsonl");
+  let done = 0;
+  let failed = 0;
+
+  try {
+    await mapLimit(records, args.concurrency, async (record) => {
+      assertNotAborted(args.signal);
+
+      try {
+        const row = await verifyOne(record, args.out, args);
+        appendJsonl(auditFile, row);
+        done++;
+
+        if (!row.ok) {
+          failed++;
+        }
+
+        onRow({ type: "row", done, failed, total: records.length, row });
+      } catch (error) {
+        if (isAbortError(error) || args.signal?.aborted) {
+          throw error;
+        }
+
+        failed++;
+        done++;
+
+        const row = {
+          ...record,
+          localPath: localPdfPath(args.out, record),
+          verified: true,
+          ok: false,
+          error: error.message,
+        };
+
+        appendJsonl(auditFile, row);
+        onRow({ type: "row", done, failed, total: records.length, row });
+      }
+    });
+  } catch (error) {
+    if (isAbortError(error) || args.signal?.aborted) {
+      return { auditFile, failed, total: records.length, done, canceled: true };
+    }
+
+    throw error;
+  }
+
+  return { auditFile, failed, total: records.length, done, canceled: false };
+}
+
 async function readMetadata(file, buffer = readFileSync(file)) {
   const metadata = {
     ...readLocalPdfMetadata(file, buffer),
@@ -493,6 +611,81 @@ async function readMetadata(file, buffer = readFileSync(file)) {
       ExifToolError: error.message,
     };
   }
+}
+
+async function readMetadataFromBuffer(buffer, filename = "remote.pdf") {
+  const dir = mkdtempSync(join(tmpdir(), "e14-remote-"));
+  const file = join(dir, basename(filename || "remote.pdf"));
+
+  try {
+    writeFileSync(file, buffer);
+    return await readMetadata(file, buffer);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const METADATA_COMPARE_IGNORE = new Set([
+  "Directory",
+  "ExifToolVersion",
+  "FileAccessDate",
+  "FileInodeChangeDate",
+  "FileModifyDate",
+  "FileName",
+  "MetadataSource",
+  "SourceFile",
+]);
+
+function comparableMetadata(metadata) {
+  return Object.fromEntries(
+    Object.entries(metadata || {})
+      .filter(([key]) => !METADATA_COMPARE_IGNORE.has(key))
+      .map(([key, value]) => [key, normalizeMetadataValue(value)])
+      .sort(([a], [b]) => a.localeCompare(b)),
+  );
+}
+
+function normalizeMetadataValue(value) {
+  if (value === undefined || value === null) {
+    return "";
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(normalizeMetadataValue);
+  }
+
+  if (typeof value === "object") {
+    if (value.rawValue !== undefined) {
+      return String(value.rawValue);
+    }
+
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entryValue]) => entryValue !== undefined)
+        .map(([key, entryValue]) => [key, normalizeMetadataValue(entryValue)])
+        .sort(([a], [b]) => a.localeCompare(b)),
+    );
+  }
+
+  return String(value);
+}
+
+function metadataValueEqual(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function diffMetadata(localMetadata, remoteMetadata) {
+  const local = comparableMetadata(localMetadata);
+  const remote = comparableMetadata(remoteMetadata);
+  const keys = [...new Set([...Object.keys(local), ...Object.keys(remote)])];
+
+  return keys
+    .filter((key) => !metadataValueEqual(local[key], remote[key]))
+    .map((key) => ({
+      key,
+      local: local[key],
+      remote: remote[key],
+    }));
 }
 
 function readLocalPdfMetadata(file, buffer) {
@@ -590,6 +783,7 @@ function usage() {
   console.log(`Usage:
   node scripts/e14-audit.mjs inventory [filters]
   node scripts/e14-audit.mjs download [filters]
+  node scripts/e14-audit.mjs verify [filters]
 
 Filters:
   --department 60        Departamento, 2 digits after padding
@@ -612,7 +806,7 @@ async function main() {
 
     if (args.command === "help") return usage();
 
-    if (!["inventory", "download"].includes(args.command))
+    if (!["inventory", "download", "verify"].includes(args.command))
       throw new Error(`Unknown command: ${args.command}`);
 
     ensureDir(args.out);
@@ -627,18 +821,22 @@ async function main() {
       return;
     }
 
-    const { auditFile, failed } = await runDownload(
+    const runner = args.command === "verify" ? runVerification : runDownload;
+    const { auditFile, failed } = await runner(
       records,
       args,
       ({ done, total }) => {
-        if (done % 25 === 0 || done === total)
-          console.log(`Downloaded/audited ${done}/${total}`);
+        if (done % 25 === 0 || done === total) {
+          console.log(
+            `${args.command === "verify" ? "Verified" : "Downloaded/audited"} ${done}/${total}`,
+          );
+        }
       },
     );
 
     console.log(`Audit: ${auditFile}`);
     console.log(`PDF dir: ${join(args.out, "pdf")}`);
-    console.log(`Failures/non-PDF: ${failed}`);
+    console.log(`Failures: ${failed}`);
   } finally {
     await exiftool.end();
   }
@@ -653,8 +851,10 @@ export {
   normalizeBaseUrl,
   pad,
   recordsFromData,
+  runVerification,
   runDownload,
   temisUrl,
+  verifyOne,
   writeInventory,
 };
 

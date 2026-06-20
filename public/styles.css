@@ -222,6 +222,12 @@ button:focus,
   gap: 10px;
 }
 
+.row-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 button,
 .button-link {
   min-height: 44px;
@@ -454,11 +460,53 @@ tbody tr.active {
 
 .row-action {
   min-height: 34px;
+  min-width: 92px;
   padding: 0 12px;
-  border-color: var(--line);
-  background: #f8fafc;
-  color: var(--navy);
   white-space: nowrap;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.row-action.load-action {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.row-action.load-action:hover:not(:disabled) {
+  border-color: #93c5fd;
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.row-action.verify-action {
+  border-color: #bbf7d0;
+  background: #ecfdf3;
+  color: var(--green);
+}
+
+.row-action.verify-action:hover:not(:disabled) {
+  border-color: #86efac;
+  background: #dcfce7;
+  color: #166534;
+}
+
+.row-action:focus {
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.row-action.verify-action:focus {
+  box-shadow: 0 0 0 3px rgba(21, 128, 61, 0.14);
+}
+
+.row-action:disabled {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+  color: #7a8696;
+  opacity: 1;
 }
 
 .pagination {

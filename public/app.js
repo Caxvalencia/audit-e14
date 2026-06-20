@@ -393,13 +393,24 @@ function renderRows() {
       
       <td>${auditPill(audit)}</td>
 
-      <td><button class="row-action" type="button">Cargar</button></td>
+      <td>
+        <div class="row-actions">
+          <button class="row-action load-action" type="button">Cargar</button>
+          <button class="row-action verify-action" type="button" ${audit?.localPath ? "" : "disabled"}>Validar</button>
+        </div>
+      </td>
     `;
 
-    tr.querySelector(".row-action").addEventListener("click", (event) => {
+    tr.querySelector(".load-action").addEventListener("click", (event) => {
       event.stopPropagation();
       loadSingleRow(record, event.currentTarget);
     });
+
+    tr.querySelector(".verify-action").addEventListener("click", (event) => {
+      event.stopPropagation();
+      verifySingleRow(record, event.currentTarget);
+    });
+
     tr.addEventListener("click", () => selectRecord(record));
     fragment.appendChild(tr);
   });
@@ -472,6 +483,20 @@ function statusPill(status) {
 function auditPill(audit) {
   if (!audit) return `<span class="pill warn">Sin auditar</span>`;
 
+  if (audit.verification) {
+    if (audit.ok) {
+      return `<span class="pill ok">Validado</span>`;
+    }
+
+    if (audit.verification.checksumOk === false) {
+      return `<span class="pill error">Hash distinto</span>`;
+    }
+
+    if (audit.verification.metadataOk === false) {
+      return `<span class="pill error">Metadata distinta</span>`;
+    }
+  }
+
   if (audit.ok) {
     return `<span class="pill ok">${formatBytes(audit.bytes)}</span>`;
   }
@@ -489,6 +514,7 @@ function renderDetail(record) {
   const audit = state.audits.get(recordKey(record));
   els.detailSubtitle.textContent = `${record.departmentName} / ${record.municipalityName} / Mesa ${record.table}`;
   const meta = audit?.metadata || {};
+  const verification = audit?.verification;
   const entries = [
     ["Departamento", `${record.department} - ${record.departmentName}`],
     ["Municipio", `${record.municipality} - ${record.municipalityName}`],
@@ -498,7 +524,29 @@ function renderDetail(record) {
     ["Estado", Number(record.status) === 11 ? "Publicado" : "Pendiente"],
     ["Archivo", record.expectedName],
     ["SHA-256", audit?.sha256 || ""],
+    ["SHA-256 remoto", verification?.remoteSha256 || ""],
+    [
+      "Checksum",
+      verification
+        ? verification.checksumOk
+          ? "Coincide"
+          : "No coincide"
+        : "",
+    ],
+    [
+      "Metadata",
+      verification
+        ? verification.metadataOk
+          ? "Coincide"
+          : "No coincide"
+        : "",
+    ],
+    ["Validado", verification?.verifiedAt || ""],
     ["Bytes", audit?.bytes ? formatBytes(audit.bytes) : ""],
+    [
+      "Bytes remoto",
+      verification?.remoteBytes ? formatBytes(verification.remoteBytes) : "",
+    ],
     ["Error", audit?.error || ""],
     ["Paginas", meta.PageCount || ""],
     ["Version PDF", meta.PDFVersion || ""],
@@ -516,10 +564,32 @@ function renderDetail(record) {
     const spacer = document.createElement("dd");
     spacer.className = "metadata-heading";
     spacer.textContent = `${metaEntries.length} campos`;
+
     nodes.push(heading, spacer);
 
     for (const [key, value] of metaEntries) {
       nodes.push(...detailPair(key, formatMetaValue(value), true));
+    }
+  }
+
+  if (verification?.metadataDiff?.length) {
+    const heading = document.createElement("dt");
+    heading.className = "metadata-heading";
+    heading.textContent = "Diferencias metadata";
+
+    const spacer = document.createElement("dd");
+    spacer.className = "metadata-heading";
+    spacer.textContent = `${verification.metadataDiff.length} campos`;
+    nodes.push(heading, spacer);
+
+    for (const diff of verification.metadataDiff) {
+      nodes.push(
+        ...detailPair(
+          diff.key,
+          `Local: ${formatMetaValue(diff.local)} | Registraduria: ${formatMetaValue(diff.remote)}`,
+          true,
+        ),
+      );
     }
   }
 
@@ -549,9 +619,14 @@ function detailPair(label, value, metadata = false) {
 
   const dd = document.createElement("dd");
   dd.textContent = value || "—";
+  dd.classList.add("mono");
 
-  if (["SHA-256", "Archivo"].includes(label) || metadata) {
-    dd.classList.add("mono");
+  if (["Checksum", "Metadata"].includes(label) || metadata) {
+    if (value.includes("No coincide") || value.includes("Error")) {
+      dd.classList.add("pill", "error");
+    } else if (value.includes("Coincide") || value.includes("Coincide")) {
+      dd.classList.add("pill", "ok");
+    }
   }
 
   return [dt, dd];
@@ -684,7 +759,7 @@ async function downloadAudit() {
 
   if (actualCount > 2000) {
     const confirmDownload = confirm(
-      `¡Atención! Estás a punto de descargar y auditar ${formatNumber(actualCount)} formularios E14.\n\nEsta operación puede tardar bastante tiempo y consumir una cantidad significativa de ancho de banda y almacenamiento.\n\n¿Estás seguro de que deseas continuar?`
+      `¡Atención! Estás a punto de descargar y auditar ${formatNumber(actualCount)} formularios E14.\n\nEsta operación puede tardar bastante tiempo y consumir una cantidad significativa de ancho de banda y almacenamiento.\n\n¿Estás seguro de que deseas continuar?`,
     );
     if (!confirmDownload) {
       return;
@@ -767,13 +842,76 @@ async function loadSingleRow(record, button) {
       const key = recordKey(result);
       state.audits.set(key, result);
       const index = state.records.findIndex((item) => recordKey(item) === key);
+
       if (index >= 0) {
         state.records[index] = { ...state.records[index], ...result };
       }
+
       state.selected = state.records[index] || result;
       renderRows();
       renderDetail(state.selected);
       setStatus("Fila cargada", "ok");
+    } else {
+      setStatus("Sin resultado", "error");
+    }
+  } catch (error) {
+    setStatus("Error", "error");
+    showError(error);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
+async function verifySingleRow(record, button) {
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Validando";
+
+  selectRecord(record);
+  setStatus("Validando fila", "busy");
+
+  try {
+    const res = await fetch("/api/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...params(),
+        department: record.department,
+        municipality: record.municipality,
+        zone: record.zone,
+        stand: record.stand,
+        table: record.table,
+        corporation: record.corporation,
+        limit: 0,
+        concurrency: 1,
+      }),
+    });
+
+    if (!res.ok || !res.body) {
+      throw new Error("No se pudo validar la fila");
+    }
+
+    const result = await readSingleRowNdjson(res.body);
+
+    if (result) {
+      const key = recordKey(result);
+      state.audits.set(key, result);
+
+      const index = state.records.findIndex((item) => recordKey(item) === key);
+
+      if (index >= 0) {
+        state.records[index] = { ...state.records[index], ...result };
+      }
+
+      state.selected = state.records[index] || result;
+      renderRows();
+      renderDetail(state.selected);
+
+      setStatus(
+        result.ok ? "Validacion correcta" : "Validacion con diferencias",
+        result.ok ? "ok" : "error",
+      );
     } else {
       setStatus("Sin resultado", "error");
     }
