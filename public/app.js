@@ -147,6 +147,7 @@ function currentBaseUrl() {
 function normalizeBaseUrl(value) {
   const url = new URL(String(value || state.defaultBaseUrl).trim());
   url.pathname = url.pathname.replace(/\/+$/, "");
+  if (url.pathname === "/home") url.pathname = "/";
   url.search = "";
   url.hash = "";
 

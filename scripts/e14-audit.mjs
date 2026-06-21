@@ -98,6 +98,7 @@ function ensureDir(path) {
 function normalizeBaseUrl(value = DEFAULT_BASE_URL) {
   const url = new URL(String(value || DEFAULT_BASE_URL).trim());
   url.pathname = url.pathname.replace(/\/+$/, "");
+  if (url.pathname === "/home") url.pathname = "/";
   url.search = "";
   url.hash = "";
 
@@ -168,14 +169,49 @@ function isAbortError(error) {
 }
 
 async function fetchJsonCached(url, cacheFile) {
-  if (existsSync(cacheFile)) return JSON.parse(readFileSync(cacheFile, "utf8"));
   ensureDir(dirname(cacheFile));
-  const res = await fetchWithRetry(url, {
-    headers: { accept: "application/json" },
-  });
-  const text = await res.text();
-  writeFileSync(cacheFile, text);
-  return JSON.parse(text);
+  let lastError;
+
+  for (let i = 1; i <= 3; i++) {
+    const remoteUrl = `${url}${url.includes("?") ? "&" : "?"}uuid=${Date.now()}-${i}`;
+
+    try {
+      const res = await fetchWithRetry(
+        remoteUrl,
+        {
+          timeoutMs: 12000,
+          headers: {
+            accept: "application/json, text/plain, */*",
+            "cache-control": "no-cache",
+            pragma: "no-cache",
+          },
+        },
+        1,
+      );
+
+      const text = await res.text();
+      const json = JSON.parse(text);
+      writeFileSync(cacheFile, text);
+
+      return json;
+    } catch (error) {
+      lastError = error;
+
+      if (i < 3) {
+        await sleep(500 * i);
+      }
+    }
+  }
+
+  if (existsSync(cacheFile)) {
+    try {
+      return JSON.parse(readFileSync(cacheFile, "utf8"));
+    } catch (error) {
+      throw new Error(`Invalid cached JSON at ${cacheFile}: ${error.message}`);
+    }
+  }
+
+  throw lastError;
 }
 
 function sleep(ms) {

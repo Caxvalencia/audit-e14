@@ -8,10 +8,12 @@ Todos los cambios relevantes del proyecto se documentan en este archivo.
 
 - Actualizada la fuente por defecto de la Registraduria a `https://e14segundavueltapresidente.registraduria.gov.co`.
 - La normalizacion de URL base ahora acepta la URL publica con `/home` y la convierte a la base usada para cargar `/assets/temis`.
+- La carga de JSON fuente ahora intenta refrescar datos remotos y usa `raw/*.json` solo como respaldo si falla la red.
 
 ### Verificado
 
 - Validacion sintactica del proyecto con `pnpm run check`.
+- Carga de inventario con la URL publica `/home` contra `/api/inventory`.
 
 ## 1.1.0 - 2026-06-19
 
