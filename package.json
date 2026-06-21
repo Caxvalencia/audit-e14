@@ -1,6 +1,6 @@
 {
   "name": "audit-e-14",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "App local para inventariar, descargar y auditar metadatos de formularios E14 publicados por la Registraduria.",
   "main": "electron/main.mjs",
   "scripts": {

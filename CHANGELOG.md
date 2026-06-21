@@ -2,11 +2,10 @@
 
 Todos los cambios relevantes del proyecto se documentan en este archivo.
 
-## 1.1.1 - 2026-06-21
+## 1.1.2 - 2026-06-21
 
-### Cambiado
+### Corregido
 
-- Actualizada la fuente por defecto de la Registraduria a `https://e14segundavueltapresidente.registraduria.gov.co`.
 - La normalizacion de URL base ahora acepta la URL publica con `/home` y la convierte a la base usada para cargar `/assets/temis`.
 - La carga de JSON fuente ahora intenta refrescar datos remotos y usa `raw/*.json` solo como respaldo si falla la red.
 
@@ -14,6 +13,16 @@ Todos los cambios relevantes del proyecto se documentan en este archivo.
 
 - Validacion sintactica del proyecto con `pnpm run check`.
 - Carga de inventario con la URL publica `/home` contra `/api/inventory`.
+
+## 1.1.1 - 2026-06-21
+
+### Cambiado
+
+- Actualizada la fuente por defecto de la Registraduria a `https://e14segundavueltapresidente.registraduria.gov.co`.
+
+### Verificado
+
+- Validacion sintactica del proyecto con `pnpm run check`.
 
 ## 1.1.0 - 2026-06-19
 
