@@ -44,7 +44,7 @@ if (process.versions.electron) {
 const exiftool = new ExifTool(exiftoolInstanceOptions);
 
 const DEFAULT_BASE_URL =
-  "https://divulgacione14presidente.registraduria.gov.co";
+  "https://e14segundavueltapresidente.registraduria.gov.co";
 const DEFAULT_OUT = "output/e14";
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126 Safari/537.36";

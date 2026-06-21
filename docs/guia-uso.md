@@ -3,7 +3,7 @@
 Esta herramienta permite inventariar, descargar y auditar formularios E14 desde la pagina publica de divulgacion de la Registraduria:
 
 ```text
-https://divulgacione14presidente.registraduria.gov.co/home
+https://e14segundavueltapresidente.registraduria.gov.co/home
 ```
 
 La app usa los JSON y PDFs publicados por el sitio. No automatiza clics en la pagina oficial.
@@ -120,7 +120,7 @@ La interfaz carga todos los registros que coinciden con los filtros, pero solo r
 La modal `Configuracion` agrupa los ajustes operativos que no cambian la ubicacion electoral filtrada:
 
 `URL base`
-: Fuente de datos usada para los JSON y PDFs. Por defecto: `https://divulgacione14presidente.registraduria.gov.co`.
+: Fuente de datos usada para los JSON y PDFs. Por defecto: `https://e14segundavueltapresidente.registraduria.gov.co`.
 
 `Carpeta salida`
 : Carpeta local donde se escriben inventarios, auditoria, cache JSON y PDFs. Por defecto: `output/e14`.

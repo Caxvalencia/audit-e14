@@ -9,7 +9,7 @@ App local para inventariar, descargar y auditar metadatos de formularios E14 pub
 Sitio fuente:
 
 ```text
-https://divulgacione14presidente.registraduria.gov.co/home
+https://e14segundavueltapresidente.registraduria.gov.co/home
 ```
 
 ## Descargas (Última versión)

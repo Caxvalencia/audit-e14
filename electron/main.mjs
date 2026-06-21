@@ -29,7 +29,7 @@ function showAboutDialog() {
       appDescription,
       "",
       "Fuente por defecto:",
-      "https://divulgacione14presidente.registraduria.gov.co",
+      "https://e14segundavueltapresidente.registraduria.gov.co",
       "",
       "Los archivos generados se guardan localmente en la carpeta de salida configurada.",
       "Licencia MIT",

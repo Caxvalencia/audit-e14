@@ -26,7 +26,7 @@ scripts/
 La fuente por defecto es:
 
 ```text
-https://divulgacione14presidente.registraduria.gov.co
+https://e14segundavueltapresidente.registraduria.gov.co
 ```
 
 La interfaz permite cambiar esta URL desde `Configuracion`. El backend conserva la fuente por defecto si no se envia `baseUrl`.
@@ -34,9 +34,9 @@ La interfaz permite cambiar esta URL desde `Configuracion`. El backend conserva 
 La pagina oficial carga informacion desde archivos publicados bajo `/assets/temis`:
 
 ```text
-https://divulgacione14presidente.registraduria.gov.co/assets/temis/divipol_json/departmentsTree.json
-https://divulgacione14presidente.registraduria.gov.co/assets/temis/divipol_json/allCorporations.json
-https://divulgacione14presidente.registraduria.gov.co/assets/temis/divipol_json/allTransmissionCodes.json
+https://e14segundavueltapresidente.registraduria.gov.co/assets/temis/divipol_json/departmentsTree.json
+https://e14segundavueltapresidente.registraduria.gov.co/assets/temis/divipol_json/allCorporations.json
+https://e14segundavueltapresidente.registraduria.gov.co/assets/temis/divipol_json/allTransmissionCodes.json
 ```
 
 El codigo no hace scraping visual. Usa esos archivos para construir el inventario.
@@ -87,7 +87,7 @@ Respuesta:
 
 ```json
 {
-  "defaultBaseUrl": "https://divulgacione14presidente.registraduria.gov.co"
+  "defaultBaseUrl": "https://e14segundavueltapresidente.registraduria.gov.co"
 }
 ```
 
@@ -105,7 +105,7 @@ Parametro opcional:
 
 ```text
 out=output/e14
-baseUrl=https://divulgacione14presidente.registraduria.gov.co
+baseUrl=https://e14segundavueltapresidente.registraduria.gov.co
 ```
 
 ### `GET /api/inventory`
@@ -122,7 +122,7 @@ stand=00
 corporation=001
 limit=3
 out=output/e14
-baseUrl=https://divulgacione14presidente.registraduria.gov.co
+baseUrl=https://e14segundavueltapresidente.registraduria.gov.co
 pageSize=1000
 ```
 
@@ -162,7 +162,7 @@ Body:
   "limit": 3,
   "concurrency": 4,
   "out": "output/e14",
-  "baseUrl": "https://divulgacione14presidente.registraduria.gov.co",
+  "baseUrl": "https://e14segundavueltapresidente.registraduria.gov.co",
   "skipExisting": true,
   "metadata": true
 }
