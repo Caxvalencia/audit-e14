@@ -160,6 +160,10 @@ function fileUrl(path) {
   )}`;
 }
 
+function remoteFileUrl(url) {
+  return `/api/remote-file?url=${encodeURIComponent(url)}`;
+}
+
 function queryFromParams(extra = {}) {
   const data = { ...params(), ...extra };
   const q = new URLSearchParams();
@@ -595,7 +599,7 @@ function renderDetail(record) {
   }
 
   els.detailList.replaceChildren(...nodes);
-  els.openPdf.href = record.pdfUrl;
+  els.openPdf.href = remoteFileUrl(record.pdfUrl);
   els.openPdf.dataset.path = "";
   els.openPdf.classList.remove("disabled");
 
@@ -1049,19 +1053,6 @@ function showError(error) {
   els.detailList.append(dt, dd);
 }
 
-async function openDesktopPath(event) {
-  if (!desktop || !event.currentTarget.dataset.path) {
-    return;
-  }
-
-  event.preventDefault();
-  const result = await desktop.openPath(event.currentTarget.dataset.path);
-
-  if (!result.ok) {
-    showError(new Error(result.error || "No se pudo abrir el archivo"));
-  }
-}
-
 if (desktop) {
   els.chooseOutBtn.classList.remove("hidden");
 }
@@ -1089,7 +1080,6 @@ els.configDialog.addEventListener("cancel", () => {
 els.configForm.addEventListener("submit", saveConfig);
 els.resetBaseUrlBtn.addEventListener("click", resetBaseUrl);
 els.chooseOutBtn.addEventListener("click", chooseOutputFolder);
-els.openLocal.addEventListener("click", openDesktopPath);
 els.cancelBtn.addEventListener("click", () => {
   state.downloadController?.abort();
 });

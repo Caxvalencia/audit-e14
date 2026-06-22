@@ -8,11 +8,13 @@ Todos los cambios relevantes del proyecto se documentan en este archivo.
 
 - La normalizacion de URL base ahora acepta la URL publica con `/home` y la convierte a la base usada para cargar `/assets/temis`.
 - La carga de JSON fuente ahora intenta refrescar datos remotos y usa `raw/*.json` solo como respaldo si falla la red.
+- El boton `Abrir PDF` ahora sirve los PDFs remotos desde la app local para evitar navegar al visor web de la Registraduria.
 
 ### Verificado
 
 - Validacion sintactica del proyecto con `pnpm run check`.
 - Carga de inventario con la URL publica `/home` contra `/api/inventory`.
+- Apertura de PDF remoto mediante `/api/remote-file` validada con respuesta `application/pdf`.
 
 ## 1.1.1 - 2026-06-21
 

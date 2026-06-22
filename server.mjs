@@ -31,6 +31,9 @@ const MIME = {
   ".svg": "image/svg+xml",
 };
 
+const UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126 Safari/537.36";
+
 function json(res, status, payload) {
   const body = JSON.stringify(payload);
 
@@ -360,6 +363,62 @@ async function handleApi(req, res, url, context) {
     });
 
     createReadStream(file).pipe(res);
+
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/remote-file") {
+    const requested = url.searchParams.get("url");
+
+    if (!requested) {
+      return notFound(res);
+    }
+
+    let remoteUrl;
+    try {
+      remoteUrl = new URL(requested);
+    } catch {
+      return notFound(res);
+    }
+
+    if (
+      !["http:", "https:"].includes(remoteUrl.protocol) ||
+      !remoteUrl.pathname.endsWith(".pdf") ||
+      !remoteUrl.pathname.includes("/assets/temis/pdf/")
+    ) {
+      return notFound(res);
+    }
+
+    try {
+      remoteUrl.searchParams.set("uuid", Date.now().toString());
+      const remote = await fetch(remoteUrl, {
+        headers: {
+          "user-agent": UA,
+          accept: "application/pdf,*/*",
+        },
+      });
+
+      if (!remote.ok) {
+        return json(res, remote.status, {
+          error: `Remote PDF failed: ${remote.status} ${remote.statusText}`,
+        });
+      }
+
+      const buffer = Buffer.from(await remote.arrayBuffer());
+
+      if (buffer.subarray(0, 5).toString() !== "%PDF-") {
+        return json(res, 502, { error: "Remote response is not a PDF" });
+      }
+
+      res.writeHead(200, {
+        "content-type": "application/pdf",
+        "content-length": buffer.length,
+        "content-disposition": `inline; filename="${remoteUrl.pathname.split("/").pop()}"`,
+      });
+      res.end(buffer);
+    } catch (error) {
+      return json(res, 502, { error: error.message });
+    }
 
     return;
   }
