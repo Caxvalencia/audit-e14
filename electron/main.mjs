@@ -18,6 +18,29 @@ let serverHandle;
 
 app.setName(appName);
 
+function windowTitleFromUrl(value) {
+  try {
+    const url = new URL(value);
+
+    return url.searchParams.get("title") || "";
+  } catch {
+    return "";
+  }
+}
+
+function keepWindowTitle(window, title) {
+  if (!title) return;
+
+  window.setTitle(title);
+  window.webContents.on("page-title-updated", (event) => {
+    event.preventDefault();
+    window.setTitle(title);
+  });
+  window.webContents.once("did-finish-load", () => {
+    window.setTitle(title);
+  });
+}
+
 function showAboutDialog() {
   dialog.showMessageBox(mainWindow, {
     type: "info",
@@ -122,6 +145,19 @@ async function createWindow() {
       preload,
       sandbox: false,
     },
+  });
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    const title = windowTitleFromUrl(url);
+
+    return {
+      action: "allow",
+      overrideBrowserWindowOptions: title ? { title } : {},
+    };
+  });
+
+  mainWindow.webContents.on("did-create-window", (window, details) => {
+    keepWindowTitle(window, windowTitleFromUrl(details.url));
   });
 
   await mainWindow.loadURL(serverHandle.url);

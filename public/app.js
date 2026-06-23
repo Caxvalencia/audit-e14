@@ -44,6 +44,7 @@ const els = {
   detailList: $("detailList"),
   openPdf: $("openPdf"),
   openLocal: $("openLocal"),
+  showLocal: $("showLocal"),
   progressLabel: $("progressLabel"),
   progressCount: $("progressCount"),
   progressBar: $("progressBar"),
@@ -154,14 +155,31 @@ function normalizeBaseUrl(value) {
   return url.toString().replace(/\/+$/, "");
 }
 
-function fileUrl(path) {
-  return `/api/file?path=${encodeURIComponent(path)}&out=${encodeURIComponent(
-    els.out.value || "output/e14",
-  )}`;
+function fileUrl(path, title = "") {
+  const q = new URLSearchParams({
+    path,
+    out: els.out.value || "output/e14",
+  });
+
+  if (title) {
+    q.set("title", title);
+  }
+
+  return `/api/file?${q.toString()}`;
 }
 
-function remoteFileUrl(url) {
-  return `/api/remote-file?url=${encodeURIComponent(url)}`;
+function remoteFileUrl(url, title = "") {
+  const q = new URLSearchParams({ url });
+
+  if (title) {
+    q.set("title", title);
+  }
+
+  return `/api/remote-file?${q.toString()}`;
+}
+
+function recordTitle(record) {
+  return `${record.departmentName} / ${record.municipalityName} / Mesa ${record.table}`;
 }
 
 function queryFromParams(extra = {}) {
@@ -517,7 +535,8 @@ function selectRecord(record) {
 
 function renderDetail(record) {
   const audit = state.audits.get(recordKey(record));
-  els.detailSubtitle.textContent = `${record.departmentName} / ${record.municipalityName} / Mesa ${record.table}`;
+  const title = recordTitle(record);
+  els.detailSubtitle.textContent = title;
   const meta = audit?.metadata || {};
   const verification = audit?.verification;
   const entries = [
@@ -599,18 +618,24 @@ function renderDetail(record) {
   }
 
   els.detailList.replaceChildren(...nodes);
-  els.openPdf.href = remoteFileUrl(record.pdfUrl);
+  els.openPdf.href = remoteFileUrl(record.pdfUrl, title);
   els.openPdf.dataset.path = "";
   els.openPdf.classList.remove("disabled");
 
   if (audit?.localPath) {
-    els.openLocal.href = fileUrl(audit.localPath);
+    els.openLocal.href = fileUrl(audit.localPath, title);
     els.openLocal.dataset.path = audit.localPath;
     els.openLocal.classList.remove("disabled");
+    els.showLocal.dataset.path = audit.localPath;
+    els.showLocal.disabled = !desktop;
+    els.showLocal.classList.toggle("disabled", !desktop);
   } else {
     els.openLocal.href = "#";
     els.openLocal.dataset.path = "";
     els.openLocal.classList.add("disabled");
+    els.showLocal.dataset.path = "";
+    els.showLocal.disabled = true;
+    els.showLocal.classList.add("disabled");
   }
 }
 
@@ -1053,6 +1078,20 @@ function showError(error) {
   els.detailList.append(dt, dd);
 }
 
+async function showLocalInFolder(event) {
+  const path = event.currentTarget.dataset.path;
+
+  if (!desktop || !path) {
+    return;
+  }
+
+  const result = await desktop.showItemInFolder(path);
+
+  if (!result.ok) {
+    showError(new Error(result.error || "No se pudo mostrar el archivo"));
+  }
+}
+
 if (desktop) {
   els.chooseOutBtn.classList.remove("hidden");
 }
@@ -1080,6 +1119,7 @@ els.configDialog.addEventListener("cancel", () => {
 els.configForm.addEventListener("submit", saveConfig);
 els.resetBaseUrlBtn.addEventListener("click", resetBaseUrl);
 els.chooseOutBtn.addEventListener("click", chooseOutputFolder);
+els.showLocal.addEventListener("click", showLocalInFolder);
 els.cancelBtn.addEventListener("click", () => {
   state.downloadController?.abort();
 });

@@ -641,6 +641,11 @@ dd {
   padding: 0 16px 16px;
 }
 
+.header-action {
+  min-height: 38px;
+  white-space: nowrap;
+}
+
 .button-link {
   background: #f8fafc;
   border-color: var(--line);
@@ -764,6 +769,7 @@ dd {
   .metrics,
   .filters,
   .actions,
+  .detail-actions,
   .grid-two {
     grid-template-columns: 1fr;
   }
