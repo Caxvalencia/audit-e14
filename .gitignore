@@ -1,5 +1,6 @@
 node_modules/
 .DS_Store
+config.json
 
 # Runtime outputs and downloaded E14 artifacts
 output/

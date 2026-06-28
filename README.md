@@ -113,6 +113,30 @@ Descarga y auditoria:
 node scripts/e14-audit.mjs download --department 60 --municipality 010 --zone 00 --stand 00 --limit 3
 ```
 
+Extraccion OCR de votos desde PDFs locales ya descargados:
+
+```bash
+node scripts/e14-audit.mjs ocr --department 60 --municipality 010 --zone 00 --stand 00 --limit 3
+```
+
+OCR con modelo de digitos manuscritos usando Transformers.js:
+
+```bash
+node scripts/e14-audit.mjs ocr --department 60 --municipality 010 --zone 00 --stand 00 --limit 3 --ocr-provider transformers --ocr-model super-j/vit-base-mnist
+```
+
+Si ya tienes un modelo ONNX compatible descargado/local:
+
+```bash
+E14_OCR_LOCAL_MODEL_PATH=/ruta/a/models node scripts/e14-audit.mjs ocr --ocr-provider transformers --ocr-model nombre-o-ruta-modelo --ocr-local-only
+```
+
+Guardar imagenes de depuracion OCR:
+
+```bash
+node scripts/e14-audit.mjs ocr --department 60 --municipality 010 --zone 00 --stand 00 --limit 3 --keep-ocr-images
+```
+
 Fuente personalizada:
 
 ```bash
@@ -127,6 +151,9 @@ Por defecto escribe en `output/e14`:
 - `inventory.csv`: inventario plano.
 - `inventory.jsonl`: inventario en JSON Lines.
 - `audit.jsonl`: resultado por PDF, hash y metadata.
+- `ocr-results.csv`: votos OCR por mesa, consistencia y revision requerida.
+- `ocr-zone-summary.csv`: agregados OCR solo con mesas consistentes.
+- `ocr-debug/...`: imagen renderizada y recortes OCR cuando se activa depuracion.
 - `pdf/...`: PDFs descargados.
 
 `output/` esta excluido en `.gitignore`.

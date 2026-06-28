@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createReadStream, existsSync, statSync, readFileSync } from "node:fs";
+import { createReadStream, existsSync, statSync, readFileSync, writeFileSync } from "node:fs";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { createServer } from "node:http";
 import { URL } from "node:url";
@@ -13,8 +13,10 @@ import {
   pad,
   recordsFromData,
   runDownload,
+  runOcr,
   runVerification,
   writeInventory,
+  LocalDatabase,
 } from "./scripts/e14-audit.mjs";
 
 const DEFAULT_ROOT = process.cwd();
@@ -88,6 +90,10 @@ function argsFromQuery(params, context) {
     concurrency: Number(params.get("concurrency") || 4),
     skipExisting: params.get("skipExisting") !== "false",
     metadata: params.get("metadata") !== "false",
+    keepOcrImages: params.get("keepOcrImages") === "true",
+    ocrProvider: params.get("ocrProvider") || "transformers",
+    ocrModel: params.get("ocrModel") || "mnist.onnx",
+    ocrLocalOnly: params.get("ocrLocalOnly") === "true",
   };
 }
 
@@ -105,6 +111,10 @@ function argsFromBody(body, context) {
     concurrency: Number(body.concurrency || 4),
     skipExisting: body.skipExisting !== false,
     metadata: body.metadata !== false,
+    keepOcrImages: body.keepOcrImages === true,
+    ocrProvider: body.ocrProvider || "transformers",
+    ocrModel: body.ocrModel || "mnist.onnx",
+    ocrLocalOnly: body.ocrLocalOnly === true,
   };
 }
 
@@ -156,13 +166,6 @@ function isInsideAny(file, directories) {
 }
 
 function loadExistingAudits(out, records) {
-  const auditFile = join(out, "audit.jsonl");
-  const audits = {};
-
-  if (!existsSync(auditFile)) {
-    return audits;
-  }
-
   const recordKeys = new Set(
     records.map((r) =>
       [
@@ -176,40 +179,48 @@ function loadExistingAudits(out, records) {
     ),
   );
 
-  try {
-    const content = readFileSync(auditFile, "utf8");
-    const lines = content.split("\n");
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
-
-      const row = JSON.parse(line);
-      const key = [
-        row.department,
-        row.municipality,
-        row.zone,
-        row.stand,
-        row.table,
-        row.corporation,
-      ].join("|");
-
-      if (recordKeys.has(key) && row.localPath && existsSync(row.localPath)) {
-        audits[key] = row;
-      }
-    }
-  } catch (error) {
-    console.error("Error reading audit.jsonl:", error);
-  }
-
-  return audits;
+  const db = new LocalDatabase(out);
+  return db.loadAudits(recordKeys);
 }
 
 async function handleApi(req, res, url, context) {
   if (req.method === "GET" && url.pathname === "/api/config") {
-    json(res, 200, {
+    const out =
+      url.searchParams.get("out") || context.defaultOut || DEFAULT_OUT;
+    const db = new LocalDatabase(out);
+    const savedConfig = db.loadConfig({
       defaultBaseUrl: DEFAULT_BASE_URL,
-      defaultOut: context.defaultOut,
+      defaultOut: context.defaultOut || DEFAULT_OUT,
     });
+    json(res, 200, savedConfig);
+
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/config") {
+    try {
+      const body = await readBody(req);
+      const config = body;
+      const out = config.defaultOut || context.defaultOut || DEFAULT_OUT;
+      const db = new LocalDatabase(out);
+      db.saveConfig(config);
+
+      // Guardar copia global en la raíz del proyecto
+      try {
+        const rootConfigPath = resolve(context.root, "config.json");
+        writeFileSync(rootConfigPath, JSON.stringify(config, null, 2), "utf8");
+      } catch (err) {
+        console.error("No se pudo guardar la configuración global en la raíz:", err);
+      }
+
+      if (config.defaultOut) {
+        context.defaultOut = config.defaultOut;
+      }
+
+      json(res, 200, { ok: true });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
 
     return;
   }
@@ -320,6 +331,54 @@ async function handleApi(req, res, url, context) {
     );
 
     const result = await runVerification(records, args, (event) => {
+      if (!res.destroyed && !res.writableEnded) {
+        res.write(JSON.stringify(event) + "\n");
+      }
+    });
+
+    if (!res.destroyed && !res.writableEnded) {
+      res.write(
+        JSON.stringify({
+          type: result.canceled ? "canceled" : "complete",
+          ...result,
+        }) + "\n",
+      );
+      res.end();
+    }
+
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/ocr") {
+    const body = await readBody(req);
+    const args = argsFromBody(body, context);
+    const controller = new AbortController();
+
+    req.on("close", () => {
+      if (!res.writableEnded) {
+        controller.abort();
+      }
+    });
+
+    args.signal = controller.signal;
+    const data = await loadData(args.out, args.baseUrl);
+    const records = recordsFromData(data, args);
+
+    res.writeHead(200, {
+      "content-type": "application/x-ndjson; charset=utf-8",
+      "cache-control": "no-cache",
+      "x-accel-buffering": "no",
+    });
+
+    res.write(
+      JSON.stringify({
+        type: "start",
+        summary: summarize(records),
+        total: records.length,
+      }) + "\n",
+    );
+
+    const result = await runOcr(records, args, (event) => {
       if (!res.destroyed && !res.writableEnded) {
         res.write(JSON.stringify(event) + "\n");
       }
@@ -451,10 +510,23 @@ function startServer({
   host,
   defaultOut,
 } = {}) {
+  let lastOut = defaultOut;
+  try {
+    const configPath = resolve(root, "config.json");
+    if (existsSync(configPath)) {
+      const globalConfig = JSON.parse(readFileSync(configPath, "utf8"));
+      if (globalConfig.defaultOut) {
+        lastOut = globalConfig.defaultOut;
+      }
+    }
+  } catch (e) {
+    // Si falla o no existe, no pasa nada
+  }
+
   const context = {
     root: resolve(root),
     publicDir: resolve(publicDir),
-    defaultOut: defaultOut || resolve(root, "output/e14"),
+    defaultOut: lastOut || resolve(root, "output/e14"),
   };
 
   const server = createServer(async (req, res) => {

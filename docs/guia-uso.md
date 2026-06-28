@@ -14,6 +14,17 @@ Si la fuente cambia de dominio pero conserva la estructura `/assets/temis`, se p
 
 - Node.js con `fetch` nativo. Recomendado: Node 18 o superior.
 - Dependencias instaladas con `pnpm install`.
+- Para OCR local: `tesseract` y un renderizador PDF (`pdftoppm` o `qlmanage` en macOS).
+
+### OCR local
+
+La extracción de votos usa PDFs locales ya descargados. El flujo renderiza la primera página, recorta zonas fijas del formulario E14 y puede usar `Transformers.js` para clasificar dígitos manuscritos o `tesseract` para OCR numérico tradicional. Por seguridad, solo agrega al resumen las mesas donde la suma de votos coincide con el total de votos en urna; las demás quedan marcadas como `requiere_revision` en `ocr-results.csv`.
+
+El proveedor recomendado es `Transformers.js`. En Configuración se puede cambiar el modelo OCR; por CLI se usa `--ocr-provider transformers --ocr-model <modelo>`. Para trabajar estrictamente con archivos locales, definir `E14_OCR_LOCAL_MODEL_PATH=/ruta/a/models` y ejecutar con `--ocr-local-only`.
+
+El OCR conserva resultados anteriores en `ocr-results.jsonl`. Con `Omitir existentes` activo, las mesas ya procesadas se reutilizan y no se vuelven a leer; para forzar reprocesamiento se puede desactivar esa opción o usar `--no-skip-existing` en CLI.
+
+Para revisar visualmente los recortes usados por OCR, activar `Guardar recortes OCR` en la interfaz o usar `--keep-ocr-images` en CLI. Los archivos quedan en `ocr-debug/{departamento}/{municipio}/{zona}/{puesto}/{mesa}/`.
 
 ### ExifTool (Extracción de Metadatos)
 

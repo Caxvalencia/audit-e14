@@ -53,6 +53,8 @@
 
         <button id="downloadBtn" type="button">Descargar y auditar</button>
 
+        <button id="ocrBtn" type="button">Extraer votos OCR</button>
+
         <button id="configBtn" type="button">Configuracion</button>
 
         <button id="cancelBtn" class="danger hidden" type="button">
@@ -204,6 +206,114 @@
       </section>
     </main>
 
+    <dialog id="processDialog" class="data-dialog">
+      <div class="dialog-shell">
+        <div class="config-head">
+          <div>
+            <h3 id="processTitle">Procesando</h3>
+            <p id="processSubtitle">Preparando operación</p>
+          </div>
+          <button id="closeProcessBtn" class="icon-button" type="button">
+            ×
+          </button>
+        </div>
+
+        <div class="dialog-body">
+          <div class="progress-meta">
+            <span id="processLabel">Sin proceso activo</span>
+            <span id="processCount">0 / 0</span>
+          </div>
+          <div class="progress">
+            <div id="processBar"></div>
+          </div>
+
+          <div class="ocr-metrics">
+            <div><span>Procesadas</span><strong id="ocrDone">0</strong></div>
+            <div><span>Consistentes</span><strong id="ocrOk">0</strong></div>
+            <div><span>Revisión</span><strong id="ocrReview">0</strong></div>
+            <div><span>Omitidas</span><strong id="ocrSkipped">0</strong></div>
+          </div>
+
+          <div class="dialog-actions">
+            <button id="openOcrDetailBtn" type="button" disabled>
+              Ver detalle
+            </button>
+            <button id="openOcrSummaryBtn" type="button" disabled>
+              Ver resumen
+            </button>
+            <button id="cancelProcessBtn" class="danger" type="button">
+              Cancelar
+            </button>
+          </div>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="ocrDetailDialog" class="data-dialog wide-dialog">
+      <div class="dialog-shell">
+        <div class="config-head">
+          <div>
+            <h3>Detalle OCR</h3>
+            <p id="ocrDetailSubtitle">Resultados por mesa</p>
+          </div>
+          <button id="closeOcrDetailBtn" class="icon-button" type="button">
+            ×
+          </button>
+        </div>
+        <div class="table-scroll dialog-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Ubicación</th>
+                <th>Mesa</th>
+                <th>Total val.</th>
+                <th>C1 val.</th>
+                <th>C2 val.</th>
+                <th>Blanco val.</th>
+                <th>Nulos val.</th>
+                <th>No marc. val.</th>
+                <th>Dif.</th>
+                <th>Motor</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody id="ocrDetailRows"></tbody>
+          </table>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="ocrSummaryDialog" class="data-dialog wide-dialog">
+      <div class="dialog-shell">
+        <div class="config-head">
+          <div>
+            <h3>Resumen por zona</h3>
+            <p id="ocrSummarySubtitle">Solo mesas consistentes</p>
+          </div>
+          <button id="closeOcrSummaryBtn" class="icon-button" type="button">
+            ×
+          </button>
+        </div>
+        <div class="table-scroll dialog-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Zona/Puesto</th>
+                <th>Mesas</th>
+                <th>Total</th>
+                <th>C1</th>
+                <th>C2</th>
+                <th>Blanco</th>
+                <th>Nulos</th>
+                <th>No marc.</th>
+              </tr>
+            </thead>
+            <tbody id="ocrSummaryRows"></tbody>
+          </table>
+        </div>
+      </div>
+    </dialog>
+
     <dialog id="configDialog" class="config-dialog">
       <form id="configForm" method="dialog" class="config-form">
         <div class="config-head">
@@ -264,6 +374,29 @@
           </div>
         </label>
 
+        <label style="display: none;">
+          OCR votos
+          <select id="ocrProvider">
+            <option value="transformers">Transformers.js local</option>
+            <option value="tesseract" selected>Tesseract numerico</option>
+          </select>
+
+          <small class="field-help">
+            Transformers.js clasifica digitos manuscritos localmente. Tesseract
+            queda disponible para comparar texto numerico.
+          </small>
+        </label>
+
+        <label style="display: none;">
+          Modelo OCR
+          <input id="ocrModel" type="text" value="" />
+
+          <small class="field-help">
+            Usa un modelo compatible con Transformers.js o una ruta local
+            convertida a ONNX.
+          </small>
+        </label>
+
         <div class="switches">
           <label class="check"
             ><input id="skipExisting" type="checkbox" checked /> Omitir
@@ -272,7 +405,16 @@
           <label class="check"
             ><input id="metadata" type="checkbox" checked /> Metadatos</label
           >
+          <label class="check"
+            ><input id="keepOcrImages" type="checkbox" /> Guardar recortes
+            OCR</label
+          >
+          <label class="check" style="display: none;"
+            ><input id="ocrLocalOnly" type="checkbox" /> Solo modelo local</label
+          >
         </div>
+
+        <div id="configError" class="config-error hidden"></div>
 
         <div class="config-actions">
           <button id="resetBaseUrlBtn" type="button">Restaurar</button>

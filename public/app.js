@@ -2,6 +2,16 @@ const state = {
   catalog: null,
   records: [],
   audits: new Map(),
+  ocr: new Map(),
+  ocrProcess: {
+    active: false,
+    total: 0,
+    done: 0,
+    consistent: 0,
+    needsReview: 0,
+    skipped: 0,
+    failed: 0,
+  },
   selected: null,
   downloading: false,
   downloadController: null,
@@ -26,12 +36,18 @@ const els = {
   chooseOutBtn: $("chooseOutBtn"),
   skipExisting: $("skipExisting"),
   metadata: $("metadata"),
+  keepOcrImages: $("keepOcrImages"),
+  ocrProvider: $("ocrProvider"),
+  ocrModel: $("ocrModel"),
+  ocrLocalOnly: $("ocrLocalOnly"),
   inventoryBtn: $("inventoryBtn"),
   downloadBtn: $("downloadBtn"),
+  ocrBtn: $("ocrBtn"),
   configBtn: $("configBtn"),
   cancelBtn: $("cancelBtn"),
   configDialog: $("configDialog"),
   configForm: $("configForm"),
+  configError: $("configError"),
   closeConfigBtn: $("closeConfigBtn"),
   baseUrl: $("baseUrl"),
   resetBaseUrlBtn: $("resetBaseUrlBtn"),
@@ -48,6 +64,28 @@ const els = {
   progressLabel: $("progressLabel"),
   progressCount: $("progressCount"),
   progressBar: $("progressBar"),
+  processDialog: $("processDialog"),
+  processTitle: $("processTitle"),
+  processSubtitle: $("processSubtitle"),
+  processLabel: $("processLabel"),
+  processCount: $("processCount"),
+  processBar: $("processBar"),
+  ocrDone: $("ocrDone"),
+  ocrOk: $("ocrOk"),
+  ocrReview: $("ocrReview"),
+  ocrSkipped: $("ocrSkipped"),
+  closeProcessBtn: $("closeProcessBtn"),
+  cancelProcessBtn: $("cancelProcessBtn"),
+  openOcrDetailBtn: $("openOcrDetailBtn"),
+  openOcrSummaryBtn: $("openOcrSummaryBtn"),
+  ocrDetailDialog: $("ocrDetailDialog"),
+  closeOcrDetailBtn: $("closeOcrDetailBtn"),
+  ocrDetailSubtitle: $("ocrDetailSubtitle"),
+  ocrDetailRows: $("ocrDetailRows"),
+  ocrSummaryDialog: $("ocrSummaryDialog"),
+  closeOcrSummaryBtn: $("closeOcrSummaryBtn"),
+  ocrSummarySubtitle: $("ocrSummarySubtitle"),
+  ocrSummaryRows: $("ocrSummaryRows"),
   metricTotal: $("metricTotal"),
   metricPublished: $("metricPublished"),
   metricPending: $("metricPending"),
@@ -138,6 +176,10 @@ function params() {
     out: els.out.value || "output/e14",
     skipExisting: els.skipExisting.checked,
     metadata: els.metadata.checked,
+    keepOcrImages: els.keepOcrImages.checked,
+    ocrProvider: els.ocrProvider.value || "transformers",
+    ocrModel: els.ocrModel.value || "mnist.onnx",
+    ocrLocalOnly: els.ocrLocalOnly.checked,
   };
 }
 
@@ -178,6 +220,10 @@ function remoteFileUrl(url, title = "") {
   return `/api/remote-file?${q.toString()}`;
 }
 
+function outputFileLink(path, label) {
+  return `<a href="${fileUrl(path)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`;
+}
+
 function recordTitle(record) {
   return `${record.departmentName} / ${record.municipalityName} / Mesa ${record.table}`;
 }
@@ -197,6 +243,13 @@ function queryFromParams(extra = {}) {
 
 async function loadCatalog() {
   setStatus("Cargando", "busy");
+
+  const savedDepartment = els.department.value || localStorage.getItem("e14.department") || "";
+  const savedMunicipality = els.municipality.value || localStorage.getItem("e14.municipality") || "";
+  const savedZone = els.zone.value || localStorage.getItem("e14.zone") || "";
+  const savedStand = els.stand.value || localStorage.getItem("e14.stand") || "";
+  const savedCorporation = els.corporation.value || localStorage.getItem("e14.corporation") || "";
+
   const q = new URLSearchParams({
     out: els.out.value || "output/e14",
     baseUrl: currentBaseUrl(),
@@ -215,9 +268,42 @@ async function loadCatalog() {
     "Todos los departamentos",
   );
 
-  fillSelect(els.municipality, [], "Todos los municipios");
-  fillSelect(els.zone, [], "Todas las zonas");
-  fillSelect(els.stand, [], "Todos los puestos");
+  let dep = null;
+  if (
+    savedDepartment &&
+    state.catalog.departments.some((d) => d.code === savedDepartment)
+  ) {
+    els.department.value = savedDepartment;
+    dep = state.catalog.departments.find((d) => d.code === savedDepartment);
+  }
+
+  const municipalities = dep?.municipalities ?? [];
+  fillSelect(els.municipality, municipalities, "Todos los municipios");
+
+  let mun = null;
+  if (
+    savedMunicipality &&
+    municipalities.some((m) => m.code === savedMunicipality)
+  ) {
+    els.municipality.value = savedMunicipality;
+    mun = dep.municipalities.find((m) => m.code === savedMunicipality);
+  }
+
+  const zones = mun?.zones ?? [];
+  fillSelect(els.zone, zones, "Todas las zonas");
+
+  let zone = null;
+  if (savedZone && zones.some((z) => z.code === savedZone)) {
+    els.zone.value = savedZone;
+    zone = mun.zones.find((z) => z.code === savedZone);
+  }
+
+  const stands = zone?.stands ?? [];
+  fillSelect(els.stand, stands, "Todos los puestos");
+
+  if (savedStand && stands.some((s) => s.code === savedStand)) {
+    els.stand.value = savedStand;
+  }
 
   fillSelect(
     els.corporation,
@@ -225,12 +311,53 @@ async function loadCatalog() {
     "Corporacion",
   );
 
-  els.corporation.value = "001";
+  if (
+    savedCorporation &&
+    state.catalog.corporations.some((c) => c.code === savedCorporation)
+  ) {
+    els.corporation.value = savedCorporation;
+  } else {
+    els.corporation.value = "001";
+  }
+
   setStatus("Listo", "ok");
 }
 
+function collectConfig() {
+  return {
+    defaultBaseUrl: currentBaseUrl(),
+    defaultOut: els.out.value || "output/e14",
+    limit: Number(els.limit.value || 0),
+    concurrency: Number(els.concurrency.value || 4),
+    skipExisting: els.skipExisting.checked,
+    metadata: els.metadata.checked,
+    keepOcrImages: els.keepOcrImages.checked,
+    department: els.department.value || "",
+    municipality: els.municipality.value || "",
+    zone: els.zone.value || "",
+    stand: els.stand.value || "",
+    corporation: els.corporation.value || "001",
+  };
+}
+
+async function persistConfig(config) {
+  const saveRes = await fetch("/api/config", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  if (!saveRes.ok) {
+    const errJson = await saveRes.json().catch(() => ({}));
+    throw new Error(errJson.error || "No se pudo guardar la configuración en el servidor");
+  }
+}
+
 async function loadConfig() {
-  const res = await fetch("/api/config");
+  // Don't send HTML default "output/e14" — let the server use its own
+  // context.defaultOut which was read from the root config.json at startup.
+  const savedOut = localStorage.getItem("out_folder") || "";
+  const q = new URLSearchParams(savedOut ? { out: savedOut } : {});
+  const res = await fetch(`/api/config?${q.toString()}`);
 
   if (!res.ok) {
     throw new Error(
@@ -240,42 +367,70 @@ async function loadConfig() {
 
   const config = await res.json();
   state.defaultBaseUrl = normalizeBaseUrl(config.defaultBaseUrl);
-  els.baseUrl.value =
-    localStorage.getItem(BASE_URL_STORAGE_KEY) || state.defaultBaseUrl;
+  els.baseUrl.value = config.defaultBaseUrl
+    ? normalizeBaseUrl(config.defaultBaseUrl)
+    : state.defaultBaseUrl;
 
   if (config.defaultOut) {
     els.out.value = config.defaultOut;
+    localStorage.setItem("out_folder", config.defaultOut);
   }
+
+  // Restore all persisted form fields
+  if (config.limit !== undefined) els.limit.value = config.limit;
+  if (config.concurrency !== undefined) els.concurrency.value = config.concurrency;
+  if (config.skipExisting !== undefined) els.skipExisting.checked = config.skipExisting;
+  if (config.metadata !== undefined) els.metadata.checked = config.metadata;
+  if (config.keepOcrImages !== undefined) els.keepOcrImages.checked = config.keepOcrImages;
+
+  // Save filter selections to restore after catalog loads
+  if (config.department) localStorage.setItem("e14.department", config.department);
+  if (config.municipality) localStorage.setItem("e14.municipality", config.municipality);
+  if (config.zone) localStorage.setItem("e14.zone", config.zone);
+  if (config.stand) localStorage.setItem("e14.stand", config.stand);
+  if (config.corporation) localStorage.setItem("e14.corporation", config.corporation);
 }
 
 function openConfig() {
+  clearConfigError();
   els.baseUrl.value = currentBaseUrl();
   els.configDialog.showModal();
 }
 
 function closeConfig() {
+  clearConfigError();
   els.configDialog.close();
 }
 
 async function saveConfig(event) {
   event.preventDefault();
+  clearConfigError();
 
   try {
     const baseUrl = currentBaseUrl();
     els.baseUrl.value = baseUrl;
-    localStorage.setItem(BASE_URL_STORAGE_KEY, baseUrl);
+
+    await persistConfig(collectConfig());
+
     closeConfig();
     await loadCatalog();
   } catch (error) {
-    showError(error);
+    showConfigError(error.message);
   }
 }
 
 async function resetBaseUrl() {
+  clearConfigError();
   els.baseUrl.value = state.defaultBaseUrl;
-  localStorage.removeItem(BASE_URL_STORAGE_KEY);
-  closeConfig();
-  await loadCatalog();
+
+  try {
+    await persistConfig(collectConfig());
+
+    closeConfig();
+    await loadCatalog();
+  } catch (error) {
+    showConfigError(error.message);
+  }
 }
 
 async function chooseOutputFolder() {
@@ -290,6 +445,17 @@ async function chooseOutputFolder() {
   }
 
   els.out.value = folder;
+  localStorage.setItem("out_folder", folder);
+
+  try {
+    await persistConfig(collectConfig());
+  } catch (e) {
+    console.error(
+      "Error al guardar la nueva ruta de salida en el servidor:",
+      e,
+    );
+  }
+
   await loadCatalog();
 }
 
@@ -330,6 +496,7 @@ async function generateInventory() {
     const payload = await res.json();
     state.records = payload.records;
     state.audits.clear();
+    state.ocr.clear();
 
     if (payload.audits) {
       Object.entries(payload.audits).forEach(([key, val]) => {
@@ -355,6 +522,7 @@ function setBusy(disabled, label = "Procesando") {
   state.downloading = disabled;
   els.inventoryBtn.disabled = disabled;
   els.downloadBtn.disabled = disabled;
+  els.ocrBtn.disabled = disabled;
   els.cancelBtn.classList.toggle("hidden", !disabled);
   els.cancelBtn.disabled = !disabled;
 
@@ -374,8 +542,10 @@ function filteredRecords() {
   }
 
   return sorted.filter((r) => {
-    const audit = state.audits.get(recordKey(r));
-    const text = buildSearchText(r, audit);
+    const key = recordKey(r);
+    const audit = state.audits.get(key);
+    const ocr = state.ocr.get(key);
+    const text = buildSearchText(r, audit, ocr);
 
     return terms.every((term) => text.includes(term));
   });
@@ -392,6 +562,7 @@ function renderRows() {
   pageRows.forEach((record, pageIndex) => {
     const key = recordKey(record);
     const audit = state.audits.get(key);
+    const ocr = state.ocr.get(key);
     const tr = document.createElement("tr");
     tr.dataset.key = key;
 
@@ -414,7 +585,7 @@ function renderRows() {
       
       <td>${statusPill(record.status)}</td>
       
-      <td>${auditPill(audit)}</td>
+      <td>${auditPill(audit)}${ocr ? `<br>${ocrPill(ocr)}` : ""}</td>
 
       <td>
         <div class="row-actions">
@@ -454,12 +625,18 @@ function renderPagination(totalRows, start, pageRows, totalPages) {
   els.lastPage.disabled = state.currentPage >= totalPages;
 }
 
-function buildSearchText(record, audit) {
+function buildSearchText(record, audit, ocr) {
   const values = [
     ...deepValues(record),
     audit ? deepValues(audit) : [],
+    ocr ? deepValues(ocr) : [],
     Number(record.status) === 11 ? "publicado" : "pendiente",
     audit ? (audit.ok ? "auditado valido ok" : "error fallido") : "sin auditar",
+    ocr
+      ? ocr.ocr?.consistente
+        ? "ocr consistente validado"
+        : "ocr revision inconsistente"
+      : "sin ocr",
     `mesa ${record.table}`,
     `${record.department}-${record.municipality}-${record.zone}-${record.stand}`,
     `${record.departmentName} ${record.municipalityName} ${record.zoneName} ${record.standName}`,
@@ -527,6 +704,26 @@ function auditPill(audit) {
   return `<span class="pill error">Error</span>`;
 }
 
+function ocrPill(row) {
+  if (row.ocr?.consistente) {
+    return `<span class="pill ok">OCR OK</span>`;
+  }
+
+  if (row.error) {
+    return `<span class="pill error">OCR error</span>`;
+  }
+
+  return `<span class="pill warn">OCR revision</span>`;
+}
+
+function trustedOcrValue(row, key) {
+  return row?.ocr?.consistente ? (row.ocr?.values?.[key] ?? "") : "";
+}
+
+function rawOcrValue(row, key) {
+  return row?.ocr?.fields?.[key]?.raw || "";
+}
+
 function selectRecord(record) {
   state.selected = record;
   renderRows();
@@ -535,6 +732,7 @@ function selectRecord(record) {
 
 function renderDetail(record) {
   const audit = state.audits.get(recordKey(record));
+  const ocr = state.ocr.get(recordKey(record));
   const title = recordTitle(record);
   els.detailSubtitle.textContent = title;
   const meta = audit?.metadata || {};
@@ -575,6 +773,29 @@ function renderDetail(record) {
     ["Paginas", meta.PageCount || ""],
     ["Version PDF", meta.PDFVersion || ""],
   ];
+
+  if (ocr) {
+    entries.push(
+      ["OCR", ocr.ocr?.consistente ? "Consistente" : "Requiere revision"],
+      ["OCR proveedor", ocr.ocr?.proveedor ?? ""],
+      ["OCR confianza", ocr.ocr?.confianza_promedio ?? ""],
+      ["OCR total urna", trustedOcrValue(ocr, "total_votos_urna")],
+      ["OCR candidato 1", trustedOcrValue(ocr, "candidato_1")],
+      ["OCR candidato 2", trustedOcrValue(ocr, "candidato_2")],
+      ["OCR blanco", trustedOcrValue(ocr, "votos_blanco")],
+      ["OCR nulos", trustedOcrValue(ocr, "votos_nulos")],
+      ["OCR no marcados", trustedOcrValue(ocr, "votos_no_marcados")],
+      ["OCR raw total", rawOcrValue(ocr, "total_votos_urna")],
+      ["OCR raw C1", rawOcrValue(ocr, "candidato_1")],
+      ["OCR raw C2", rawOcrValue(ocr, "candidato_2")],
+      ["OCR raw blanco", rawOcrValue(ocr, "votos_blanco")],
+      ["OCR raw nulos", rawOcrValue(ocr, "votos_nulos")],
+      ["OCR raw no marc.", rawOcrValue(ocr, "votos_no_marcados")],
+      ["OCR suma", ocr.ocr?.suma_votos ?? ""],
+      ["OCR diferencia", ocr.ocr?.diferencia_total_urna ?? ""],
+      ["OCR error", ocr.error || ""],
+    );
+  }
 
   const nodes = entries.flatMap(([label, value]) => detailPair(label, value));
   const metaEntries = Object.entries(meta).sort(([a], [b]) =>
@@ -755,6 +976,139 @@ function setProgress(label, done, total) {
   els.progressBar.style.width = `${pct}%`;
 }
 
+function openProcessModal(title, subtitle) {
+  els.processTitle.textContent = title;
+  els.processSubtitle.textContent = subtitle;
+  els.openOcrDetailBtn.disabled = state.ocr.size === 0;
+  els.openOcrSummaryBtn.disabled = state.ocr.size === 0;
+
+  if (!els.processDialog.open) {
+    els.processDialog.showModal();
+  }
+}
+
+function updateProcessModal(label, stats = {}) {
+  state.ocrProcess = {
+    ...state.ocrProcess,
+    ...stats,
+  };
+  const total = state.ocrProcess.total || 0;
+  const done = state.ocrProcess.done || 0;
+  const pct = total ? Math.round((done / total) * 100) : 0;
+
+  els.processLabel.textContent = label;
+  els.processCount.textContent = `${formatNumber(done)} / ${formatNumber(total)}`;
+  els.processBar.style.width = `${pct}%`;
+  els.ocrDone.textContent = formatNumber(done);
+  els.ocrOk.textContent = formatNumber(state.ocrProcess.consistent || 0);
+  els.ocrReview.textContent = formatNumber(state.ocrProcess.needsReview || 0);
+  els.ocrSkipped.textContent = formatNumber(state.ocrProcess.skipped || 0);
+  els.openOcrDetailBtn.disabled = state.ocr.size === 0;
+  els.openOcrSummaryBtn.disabled = state.ocr.size === 0;
+}
+
+function ocrRows() {
+  return [...state.ocr.values()].sort((a, b) =>
+    recordKey(a).localeCompare(recordKey(b)),
+  );
+}
+
+function openOcrDetailModal() {
+  const rows = ocrRows();
+  els.ocrDetailSubtitle.textContent = `${formatNumber(rows.length)} mesas procesadas`;
+  els.ocrDetailRows.replaceChildren(
+    ...rows.slice(0, 1000).map((row) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${escapeHtml(row.departmentName)} / ${escapeHtml(row.municipalityName)}<br><span class="mono">${escapeHtml(row.zoneName)} / ${escapeHtml(row.standName)}</span></td>
+        <td>${escapeHtml(row.table)}</td>
+        <td>${escapeHtml(trustedOcrValue(row, "total_votos_urna"))}</td>
+        <td>${escapeHtml(trustedOcrValue(row, "candidato_1"))}</td>
+        <td>${escapeHtml(trustedOcrValue(row, "candidato_2"))}</td>
+        <td>${escapeHtml(trustedOcrValue(row, "votos_blanco"))}</td>
+        <td>${escapeHtml(trustedOcrValue(row, "votos_nulos"))}</td>
+        <td>${escapeHtml(trustedOcrValue(row, "votos_no_marcados"))}</td>
+        <td>${escapeHtml(row.ocr?.diferencia_total_urna ?? "")}</td>
+        <td>${escapeHtml(row.ocr?.proveedor ?? "")}</td>
+        <td>${row.ocr?.consistente ? "Consistente" : row.error ? "Error" : "Revision"}</td>
+      `;
+
+      return tr;
+    }),
+  );
+
+  if (!els.ocrDetailDialog.open) {
+    els.ocrDetailDialog.showModal();
+  }
+}
+
+function ocrSummaryRows() {
+  const grouped = new Map();
+
+  for (const row of state.ocr.values()) {
+    if (!row.ocr?.consistente) continue;
+
+    const key = [
+      row.department,
+      row.municipality,
+      row.zone,
+      row.stand,
+      row.corporation,
+    ].join("|");
+
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        label: `${escapeHtml(row.departmentName)} / ${escapeHtml(row.municipalityName)}<br><span class="mono">${escapeHtml(row.zoneName)} / ${escapeHtml(row.standName)}</span>`,
+        mesas: 0,
+        total: 0,
+        candidato_1: 0,
+        candidato_2: 0,
+        votos_blanco: 0,
+        votos_nulos: 0,
+        votos_no_marcados: 0,
+      });
+    }
+
+    const summary = grouped.get(key);
+    const values = row.ocr.values || {};
+    summary.mesas++;
+    summary.total += Number(values.total_votos_urna || 0);
+    summary.candidato_1 += Number(values.candidato_1 || 0);
+    summary.candidato_2 += Number(values.candidato_2 || 0);
+    summary.votos_blanco += Number(values.votos_blanco || 0);
+    summary.votos_nulos += Number(values.votos_nulos || 0);
+    summary.votos_no_marcados += Number(values.votos_no_marcados || 0);
+  }
+
+  return [...grouped.values()];
+}
+
+function openOcrSummaryModal() {
+  const rows = ocrSummaryRows();
+  els.ocrSummarySubtitle.textContent = `${formatNumber(rows.length)} grupos con mesas consistentes`;
+  els.ocrSummaryRows.replaceChildren(
+    ...rows.map((row) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${row.label}</td>
+        <td>${formatNumber(row.mesas)}</td>
+        <td>${formatNumber(row.total)}</td>
+        <td>${formatNumber(row.candidato_1)}</td>
+        <td>${formatNumber(row.candidato_2)}</td>
+        <td>${formatNumber(row.votos_blanco)}</td>
+        <td>${formatNumber(row.votos_nulos)}</td>
+        <td>${formatNumber(row.votos_no_marcados)}</td>
+      `;
+
+      return tr;
+    }),
+  );
+
+  if (!els.ocrSummaryDialog.open) {
+    els.ocrSummaryDialog.showModal();
+  }
+}
+
 function getFilteredTablesCount() {
   if (!state.catalog) return 0;
 
@@ -833,6 +1187,72 @@ async function downloadAudit() {
     }
   } finally {
     state.downloadController = null;
+    setBusy(false);
+  }
+}
+
+async function extractOcr() {
+  const count = getFilteredTablesCount();
+  const limit = Number(els.limit.value || 0);
+  const actualCount = limit > 0 ? Math.min(count, limit) : count;
+
+  if (actualCount > 500) {
+    const confirmOcr = confirm(
+      `Vas a procesar OCR sobre ${formatNumber(actualCount)} formularios locales.\n\nEl OCR puede tardar bastante y solo consolida como validas las mesas que cuadren matematicamente.\n\n¿Deseas continuar?`,
+    );
+    if (!confirmOcr) {
+      return;
+    }
+  }
+
+  setBusy(true, "OCR");
+  state.downloadController = new AbortController();
+  state.ocr.clear();
+  state.ocrProcess = {
+    active: true,
+    total: actualCount,
+    done: 0,
+    consistent: 0,
+    needsReview: 0,
+    skipped: 0,
+    failed: 0,
+  };
+  setProgress("Preparando OCR", 0, 0);
+  openProcessModal(
+    "Extrayendo votos OCR",
+    "Leyendo PDFs locales y conservando resultados ya procesados",
+  );
+  updateProcessModal("Preparando OCR", state.ocrProcess);
+  renderRows();
+
+  try {
+    const res = await fetch("/api/ocr", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(params()),
+      signal: state.downloadController.signal,
+    });
+
+    if (!res.ok || !res.body) {
+      throw new Error("No se pudo iniciar OCR");
+    }
+
+    await readNdjson(res.body, handleOcrEvent);
+
+    if (!state.downloadController.signal.aborted) {
+      setStatus("OCR listo", "ok");
+    }
+  } catch (error) {
+    if (error.name === "AbortError") {
+      setStatus("Cancelado", "error");
+      setProgress("OCR cancelado", state.ocr.size, state.records.length);
+    } else {
+      setStatus("Error", "error");
+      showError(error);
+    }
+  } finally {
+    state.downloadController = null;
+    state.ocrProcess.active = false;
     setBusy(false);
   }
 }
@@ -986,7 +1406,7 @@ async function readSingleRowNdjson(stream) {
   return loadedRow;
 }
 
-async function readNdjson(stream) {
+async function readNdjson(stream, handler = handleDownloadEvent) {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -1004,13 +1424,13 @@ async function readNdjson(stream) {
 
     for (const line of lines) {
       if (line.trim()) {
-        handleDownloadEvent(JSON.parse(line));
+        handler(JSON.parse(line));
       }
     }
   }
 
   if (buffer.trim()) {
-    handleDownloadEvent(JSON.parse(buffer));
+    handler(JSON.parse(buffer));
   }
 }
 
@@ -1068,6 +1488,95 @@ function handleDownloadEvent(event) {
   }
 }
 
+function handleOcrEvent(event) {
+  if (event.type === "start") {
+    renderMetrics(event.summary);
+    state.currentPage = 1;
+    setProgress("Extrayendo votos OCR", 0, event.total);
+    updateProcessModal("Extrayendo votos OCR", {
+      total: event.total,
+      done: 0,
+      consistent: 0,
+      needsReview: 0,
+      skipped: 0,
+      failed: 0,
+    });
+
+    return;
+  }
+
+  if (event.type === "row") {
+    const row = event.row;
+    const key = recordKey(row);
+
+    state.ocr.set(key, row);
+
+    if (!state.records.some((record) => recordKey(record) === key)) {
+      state.records.push(row);
+    }
+
+    setProgress(
+      `OCR · consistentes ${formatNumber(event.consistent || 0)} · revision ${formatNumber(event.needsReview || 0)} · omitidas ${formatNumber(event.skipped || 0)}`,
+      event.done,
+      event.total,
+    );
+    updateProcessModal("Procesando OCR", {
+      total: event.total,
+      done: event.done,
+      consistent: event.consistent || 0,
+      needsReview: event.needsReview || 0,
+      skipped: event.skipped || 0,
+      failed: event.failed || 0,
+    });
+
+    if (state.selected && recordKey(state.selected) === key) {
+      renderDetail(row);
+    }
+
+    if (event.done % 10 === 0 || event.done === event.total) {
+      renderRows();
+    }
+
+    return;
+  }
+
+  if (event.type === "complete") {
+    setProgress(
+      `OCR completo · consistentes ${formatNumber(event.consistent || 0)} · revision ${formatNumber(event.needsReview || 0)} · omitidas ${formatNumber(event.skipped || 0)}`,
+      event.total,
+      event.total,
+    );
+    updateProcessModal("OCR completo", {
+      total: event.total,
+      done: event.total,
+      consistent: event.consistent || 0,
+      needsReview: event.needsReview || 0,
+      skipped: event.skipped || 0,
+      failed: event.failed || 0,
+    });
+    renderRows();
+    els.outputHint.innerHTML = `${outputFileLink(event.resultsCsv, "Detalle OCR CSV")} · ${outputFileLink(event.summaryCsv, "Resumen por zona CSV")}`;
+  }
+
+  if (event.type === "canceled") {
+    setProgress(
+      `OCR cancelado · ${formatNumber(event.done)} procesados`,
+      event.done,
+      event.total,
+    );
+    updateProcessModal("OCR cancelado", {
+      total: event.total,
+      done: event.done,
+      consistent: event.consistent || 0,
+      needsReview: event.needsReview || 0,
+      skipped: event.skipped || 0,
+      failed: event.failed || 0,
+    });
+    renderRows();
+    els.outputHint.innerHTML = `${outputFileLink(event.resultsCsv, "Detalle OCR CSV")} · OCR cancelado`;
+  }
+}
+
 function showError(error) {
   els.detailSubtitle.textContent = "Error";
   els.detailList.replaceChildren();
@@ -1076,6 +1585,22 @@ function showError(error) {
   const dd = document.createElement("dd");
   dd.textContent = error.message;
   els.detailList.append(dt, dd);
+}
+
+function showConfigError(msg) {
+  if (els.configError) {
+    els.configError.textContent = msg;
+    els.configError.classList.remove("hidden");
+  } else {
+    alert(msg);
+  }
+}
+
+function clearConfigError() {
+  if (els.configError) {
+    els.configError.textContent = "";
+    els.configError.classList.add("hidden");
+  }
 }
 
 async function showLocalInFolder(event) {
@@ -1106,20 +1631,31 @@ els.municipality.addEventListener("change", () =>
 els.zone.addEventListener("change", () => refreshDependentFilters("zone"));
 els.inventoryBtn.addEventListener("click", generateInventory);
 els.downloadBtn.addEventListener("click", downloadAudit);
+els.ocrBtn.addEventListener("click", extractOcr);
 els.configBtn.addEventListener("click", openConfig);
 els.closeConfigBtn.addEventListener("click", closeConfig);
 els.configDialog.addEventListener("close", () => {
-  els.baseUrl.value =
-    localStorage.getItem(BASE_URL_STORAGE_KEY) || state.defaultBaseUrl;
+  els.baseUrl.value = state.defaultBaseUrl;
 });
 els.configDialog.addEventListener("cancel", () => {
-  els.baseUrl.value =
-    localStorage.getItem(BASE_URL_STORAGE_KEY) || state.defaultBaseUrl;
+  els.baseUrl.value = state.defaultBaseUrl;
 });
 els.configForm.addEventListener("submit", saveConfig);
 els.resetBaseUrlBtn.addEventListener("click", resetBaseUrl);
 els.chooseOutBtn.addEventListener("click", chooseOutputFolder);
 els.showLocal.addEventListener("click", showLocalInFolder);
+els.closeProcessBtn.addEventListener("click", () => els.processDialog.close());
+els.cancelProcessBtn.addEventListener("click", () => {
+  state.downloadController?.abort();
+});
+els.openOcrDetailBtn.addEventListener("click", openOcrDetailModal);
+els.openOcrSummaryBtn.addEventListener("click", openOcrSummaryModal);
+els.closeOcrDetailBtn.addEventListener("click", () =>
+  els.ocrDetailDialog.close(),
+);
+els.closeOcrSummaryBtn.addEventListener("click", () =>
+  els.ocrSummaryDialog.close(),
+);
 els.cancelBtn.addEventListener("click", () => {
   state.downloadController?.abort();
 });

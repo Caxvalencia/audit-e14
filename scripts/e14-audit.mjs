@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
 import {
+  copyFileSync,
   createWriteStream,
   existsSync,
   mkdtempSync,
@@ -14,6 +15,8 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { PDFDocument } from "pdf-lib";
 import { ExifTool } from "exiftool-vendored";
+import { PNG } from "pngjs";
+// import ort from "onnxruntime-node";
 
 const exiftoolInstanceOptions = {};
 
@@ -62,8 +65,16 @@ function parseArgs(argv) {
     concurrency: 4,
     skipExisting: true,
     metadata: true,
+    keepOcrImages: false,
+    ocrProvider: "tesseract",
+    ocrModel: "",
+    ocrLocalOnly: false,
     baseUrl: DEFAULT_BASE_URL,
   };
+
+  if (args.command === "--help" || args.command === "-h") {
+    args.command = "help";
+  }
 
   for (let i = 3; i < argv.length; i++) {
     const a = argv[i];
@@ -80,6 +91,10 @@ function parseArgs(argv) {
     else if (a === "--base-url") args.baseUrl = normalizeBaseUrl(next());
     else if (a === "--no-skip-existing") args.skipExisting = false;
     else if (a === "--no-metadata") args.metadata = false;
+    else if (a === "--keep-ocr-images") args.keepOcrImages = true;
+    else if (a === "--ocr-provider") args.ocrProvider = next();
+    else if (a === "--ocr-model") args.ocrModel = next();
+    else if (a === "--ocr-local-only") args.ocrLocalOnly = true;
     else if (a === "--help" || a === "-h") args.command = "help";
     else throw new Error(`Unknown argument: ${a}`);
   }
@@ -216,6 +231,210 @@ async function fetchJsonCached(url, cacheFile) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+class LocalDatabase {
+  constructor(out) {
+    this.out = out;
+    ensureDir(out);
+    this.configPath = join(out, "config.json");
+    this.inventoryPath = join(out, "inventory.jsonl");
+    this.auditPath = join(out, "audit.jsonl");
+    this.ocrPath = join(out, "ocr-results.jsonl");
+  }
+
+  // --- CONFIGURACIÓN ---
+  loadConfig(defaults = {}) {
+    if (!existsSync(this.configPath)) {
+      return defaults;
+    }
+
+    try {
+      const data = JSON.parse(readFileSync(this.configPath, "utf8"));
+      return { ...defaults, ...data };
+    } catch {
+      return defaults;
+    }
+  }
+
+  saveConfig(config) {
+    ensureDir(this.out);
+    writeFileSync(this.configPath, JSON.stringify(config, null, 2), "utf8");
+  }
+
+  // --- INVENTARIO ---
+  loadInventory() {
+    const records = [];
+
+    if (!existsSync(this.inventoryPath)) {
+      return records;
+    }
+
+    const content = readFileSync(this.inventoryPath, "utf8");
+
+    for (const line of content.split("\n")) {
+      if (!line.trim()) {
+        continue;
+      }
+
+      try {
+        records.push(JSON.parse(line));
+      } catch {}
+    }
+
+    return records;
+  }
+
+  saveInventory(records) {
+    ensureDir(this.out);
+
+    writeFileSync(
+      this.inventoryPath,
+      records.map((r) => JSON.stringify(r)).join("\n") + "\n",
+      "utf8",
+    );
+
+    const headers = [
+      "department",
+      "departmentName",
+      "municipality",
+      "municipalityName",
+      "zone",
+      "zoneName",
+      "stand",
+      "standName",
+      "table",
+      "corporation",
+      "acronym",
+      "status",
+      "expectedName",
+      "relativePdfPath",
+      "pdfUrl",
+    ];
+
+    const csv = [
+      headers.join(","),
+      ...records.map((r) => headers.map((h) => csvEscape(r[h])).join(",")),
+    ].join("\n");
+
+    writeFileSync(join(this.out, "inventory.csv"), csv, "utf8");
+  }
+
+  // --- AUDITORÍAS (DESCARGA Y METADATOS) ---
+  loadAudits(recordKeys) {
+    const audits = {};
+
+    if (!existsSync(this.auditPath)) {
+      return audits;
+    }
+
+    const content = readFileSync(this.auditPath, "utf8");
+
+    for (const line of content.split("\n")) {
+      if (!line.trim()) {
+        continue;
+      }
+
+      try {
+        const row = JSON.parse(line);
+        const key = recordKey(row);
+
+        if (!recordKeys || recordKeys.has(key)) {
+          if (row.localPath && existsSync(row.localPath)) {
+            audits[key] = row;
+          }
+        }
+      } catch {}
+    }
+
+    return audits;
+  }
+
+  saveAudit(row) {
+    ensureDir(this.out);
+    appendJsonl(this.auditPath, row);
+  }
+
+  // --- OCR ---
+  loadOcr() {
+    const rows = new Map();
+    if (!existsSync(this.ocrPath)) {
+      return rows;
+    }
+
+    const content = readFileSync(this.ocrPath, "utf8");
+
+    for (const line of content.split("\n")) {
+      if (!line.trim()) {
+        continue;
+      }
+
+      try {
+        const row = JSON.parse(line);
+        rows.set(recordKey(row), row);
+      } catch {}
+    }
+
+    return rows;
+  }
+
+  saveOcrRow(row) {
+    ensureDir(this.out);
+    appendJsonl(this.ocrPath, row);
+  }
+
+  saveOcrOutputs(rows) {
+    ensureDir(this.out);
+    writeFileSync(
+      this.ocrPath,
+      rows.map((row) => JSON.stringify(row)).join("\n") + "\n",
+      "utf8",
+    );
+
+    const resultsCsv = join(this.out, "ocr-results.csv");
+    const summaryCsv = join(this.out, "ocr-zone-summary.csv");
+    const resultHeaders = ocrResultHeaders();
+    const summaryHeaders = [
+      "department",
+      "departmentName",
+      "municipality",
+      "municipalityName",
+      "zone",
+      "zoneName",
+      "stand",
+      "standName",
+      "corporation",
+      "mesas_validadas",
+      "candidato_1",
+      "candidato_2",
+      "votos_blanco",
+      "votos_nulos",
+      "votos_no_marcados",
+      "total_votos_urna",
+    ];
+
+    writeFileSync(
+      resultsCsv,
+      [
+        resultHeaders.join(","),
+        ...rows.map((row) => ocrCsvRow(flattenOcrRow(row))),
+      ].join("\n"),
+      "utf8",
+    );
+
+    writeFileSync(
+      summaryCsv,
+      [
+        summaryHeaders.join(","),
+        ...zoneSummaryRows(rows).map((row) =>
+          summaryHeaders.map((header) => csvEscape(row[header])).join(","),
+        ),
+      ].join("\n"),
+      "utf8",
+    );
+
+    return { resultsJsonl: this.ocrPath, resultsCsv, summaryCsv };
+  }
 }
 
 async function loadData(out, baseUrl = DEFAULT_BASE_URL) {
@@ -361,11 +580,14 @@ function buildCatalog(data) {
   const departments =
     data.departmentsTree?.data?.departmentsTree?.edges?.map((e) => e.node) ??
     [];
-  const corporations = data.corporations.map((c) => ({
-    code: pad(c.idCorporationCode, 3),
-    name: c.nameCorporation || "",
-    acronym: c.acronym || "XXX",
-  }));
+  const byCode = (a, b) => Number(a.code) - Number(b.code);
+  const corporations = data.corporations
+    .map((c) => ({
+      code: pad(c.idCorporationCode, 3),
+      name: c.nameCorporation || "",
+      acronym: c.acronym || "XXX",
+    }))
+    .sort(byCode);
 
   return {
     corporations,
@@ -373,23 +595,29 @@ function buildCatalog(data) {
       .map((dep) => ({
         code: pad(dep.idDepartmentCode, 2),
         name: dep.departmentName,
-        municipalities: (dep.municipalities ?? []).map((mun) => ({
-          code: pad(mun.municipalityCode, 3),
-          name: mun.municipalityName,
-          zones: (mun.zones ?? []).map((zone) => ({
-            code: pad(zone.idZoneCode, 2),
-            code3: pad(zone.idZoneCode, 3),
-            name: zone.zoneName,
-            corporations: zone.corporations ?? [],
-            stands: (zone.stands ?? []).map((stand) => ({
-              code: pad(stand.standCode, 2),
-              name: stand.standName,
-              countTable: Number(stand.countTable || 0),
-            })),
-          })),
-        })),
+        municipalities: (dep.municipalities ?? [])
+          .map((mun) => ({
+            code: pad(mun.municipalityCode, 3),
+            name: mun.municipalityName,
+            zones: (mun.zones ?? [])
+              .map((zone) => ({
+                code: pad(zone.idZoneCode, 2),
+                code3: pad(zone.idZoneCode, 3),
+                name: zone.zoneName,
+                corporations: zone.corporations ?? [],
+                stands: (zone.stands ?? [])
+                  .map((stand) => ({
+                    code: pad(stand.standCode, 2),
+                    name: stand.standName,
+                    countTable: Number(stand.countTable || 0),
+                  }))
+                  .sort(byCode),
+              }))
+              .sort(byCode),
+          }))
+          .sort(byCode),
       }))
-      .sort((a, b) => a.name.localeCompare(b.name)),
+      .sort(byCode),
   };
 }
 
@@ -399,8 +627,1141 @@ function csvEscape(value) {
 }
 
 function writeInventory(records, out) {
-  ensureDir(out);
-  const headers = [
+  const db = new LocalDatabase(out);
+  db.saveInventory(records);
+}
+
+function localPdfPath(out, record) {
+  return join(out, "pdf", record.relativePdfPath);
+}
+
+function ocrDebugDir(out, record) {
+  return join(
+    out,
+    "ocr-debug",
+    record.department,
+    record.municipality,
+    pad(record.zone, 3),
+    record.stand,
+    record.table,
+  );
+}
+
+const OCR_FIELDS_2PAGE = [
+  {
+    key: "total_votos_urna",
+    label: "Total votos en la urna",
+    x: 0.7,
+    y: 0.278,
+    width: 0.25,
+    height: 0.04,
+  },
+  {
+    key: "candidato_1",
+    label: "Candidato 1",
+    x: 0.69,
+    y: 0.428,
+    width: 0.27,
+    height: 0.055,
+  },
+  {
+    key: "candidato_2",
+    label: "Candidato 2",
+    x: 0.69,
+    y: 0.592,
+    width: 0.27,
+    height: 0.055,
+  },
+  {
+    key: "votos_blanco",
+    label: "Votos en blanco",
+    x: 0.69,
+    y: 0.720,
+    width: 0.27,
+    height: 0.025,
+  },
+  {
+    key: "votos_nulos",
+    label: "Votos nulos",
+    x: 0.69,
+    y: 0.750,
+    width: 0.27,
+    height: 0.025,
+  },
+  {
+    key: "votos_no_marcados",
+    label: "Votos no marcados",
+    x: 0.69,
+    y: 0.782,
+    width: 0.27,
+    height: 0.025,
+  },
+];
+
+const OCR_FIELDS_3PAGE = [
+  {
+    key: "total_votos_urna",
+    label: "Total votos en la urna",
+    x: 0.7,
+    y: 0.300,
+    width: 0.25,
+    height: 0.04,
+  },
+  {
+    key: "candidato_1",
+    label: "Candidato 1",
+    x: 0.69,
+    y: 0.444,
+    width: 0.27,
+    height: 0.055,
+  },
+  {
+    key: "candidato_2",
+    label: "Candidato 2",
+    x: 0.69,
+    y: 0.602,
+    width: 0.27,
+    height: 0.055,
+  },
+  {
+    key: "votos_blanco",
+    label: "Votos en blanco",
+    x: 0.69,
+    y: 0.799,
+    width: 0.27,
+    height: 0.010,
+  },
+  {
+    key: "votos_nulos",
+    label: "Votos nulos",
+    x: 0.69,
+    y: 0.809,
+    width: 0.27,
+    height: 0.014,
+  },
+  {
+    key: "votos_no_marcados",
+    label: "Votos no marcados",
+    x: 0.69,
+    y: 0.823,
+    width: 0.27,
+    height: 0.010,
+  },
+];
+
+function getOcrFields(pageCount) {
+  return pageCount === 2 ? OCR_FIELDS_2PAGE : OCR_FIELDS_3PAGE;
+}
+
+function detectTableYBounds(imagePath) {
+  try {
+    if (!existsSync(imagePath)) return null;
+    const png = PNG.sync.read(readFileSync(imagePath));
+    const height = png.height;
+    const width = png.width;
+
+    const xStart = Math.round(width * 0.15);
+    const xEnd = Math.round(width * 0.85);
+    const tableWidth = xEnd - xStart;
+
+    const rowSums = Array(height).fill(0);
+    for (let y = 0; y < height; y++) {
+      for (let x = xStart; x < xEnd; x++) {
+        const index = (width * y + x) << 2;
+        const gray =
+          png.data[index] * 0.299 +
+          png.data[index + 1] * 0.587 +
+          png.data[index + 2] * 0.114;
+        if (gray < 170) {
+          rowSums[y]++;
+        }
+      }
+    }
+
+    const lineThreshold = tableWidth * 0.25; // Reducido del 60% al 25% para mayor tolerancia global
+
+    let yStart = null;
+    const startLimit = Math.round(height * 0.38);
+    for (let y = Math.round(height * 0.23); y < startLimit; y++) {
+      if (rowSums[y] > lineThreshold) {
+        let isMax = true;
+        for (let dy = -5; dy <= 5; dy++) {
+          if (rowSums[y + dy] > rowSums[y]) {
+            isMax = false;
+            break;
+          }
+        }
+        if (isMax) {
+          yStart = y;
+          break;
+        }
+      }
+    }
+
+    let yEnd = null;
+    const endLimit = Math.round(height * 0.80); // Extendido de 0.85 a 0.80 para PDFs de 2 páginas
+    for (let y = Math.round(height * 0.92); y > endLimit; y--) {
+      if (rowSums[y] > lineThreshold) {
+        let isMax = true;
+        for (let dy = -5; dy <= 5; dy++) {
+          if (rowSums[y + dy] > rowSums[y]) {
+            isMax = false;
+            break;
+          }
+        }
+        if (isMax) {
+          yEnd = y;
+          break;
+        }
+      }
+    }
+
+    if (yStart === null || yEnd === null) {
+      return null;
+    }
+
+    return {
+      yStartPct: yStart / height,
+      yEndPct: yEnd / height,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+function getAlignedOcrFields(imagePath, pageCount) {
+  const fields = getOcrFields(pageCount);
+  const bounds = detectTableYBounds(imagePath);
+  console.log(`[OCR Global] PageCount: ${pageCount} | Bounds:`, bounds);
+  if (!bounds) {
+    return fields;
+  }
+
+  const { yStartPct, yEndPct } = bounds;
+  const yStartRef = 0.205;
+  const yEndRef = pageCount === 2 ? 0.835 : 0.878;
+
+  return fields.map((field) => {
+    const valRel = (field.y - yStartRef) / (yEndRef - yStartRef);
+    const newY = yStartPct + valRel * (yEndPct - yStartPct);
+    console.log(`  => Field ${field.key}: theoryY=${field.y} | alignedY=${newY.toFixed(4)}`);
+    return {
+      ...field,
+      y: newY,
+    };
+  });
+}
+
+function ensureOcrTools(args = {}) {
+  if (!commandExists("pdftoppm") && !commandExists("qlmanage")) {
+    throw new Error("OCR requiere pdftoppm o qlmanage para renderizar PDFs");
+  }
+
+  if (!commandExists("tesseract")) {
+    throw new Error("OCR requiere tesseract instalado en el sistema");
+  }
+}
+
+function normalizeOcrProvider(provider = "tesseract") {
+  return "tesseract";
+}
+
+function renderPdfPage(file, dir, pageNumber = 1) {
+  if (commandExists("pdftoppm")) {
+    const prefix = join(dir, "page");
+    const result = spawnSync(
+      "pdftoppm",
+      [
+        "-f",
+        String(pageNumber),
+        "-l",
+        String(pageNumber),
+        "-singlefile",
+        "-png",
+        "-r",
+        "120",
+        file,
+        prefix,
+      ],
+      {
+        encoding: "utf8",
+        timeout: 30000,
+      },
+    );
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    if (result.status !== 0) {
+      throw new Error(
+        result.stderr || result.stdout || "No se pudo renderizar PDF",
+      );
+    }
+
+    const rendered = `${prefix}.png`;
+    if (!existsSync(rendered)) {
+      throw new Error("No se genero imagen para OCR");
+    }
+
+    return rendered;
+  }
+
+  const result = spawnSync("qlmanage", ["-t", "-s", "1800", "-o", dir, file], {
+    encoding: "utf8",
+    timeout: 30000,
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  if (result.status !== 0) {
+    throw new Error(
+      result.stderr || result.stdout || "No se pudo renderizar PDF",
+    );
+  }
+
+  const files = spawnSync("find", [dir, "-maxdepth", "1", "-name", "*.png"], {
+    encoding: "utf8",
+  })
+    .stdout.trim()
+    .split("\n")
+    .filter(Boolean)
+    .sort();
+
+  const rendered = files[pageNumber - 1] || files[0];
+
+  if (!rendered) {
+    throw new Error("No se genero imagen para OCR");
+  }
+
+  return rendered;
+}
+
+function imageSize(file) {
+  const image = PNG.sync.read(readFileSync(file));
+
+  return {
+    width: image.width,
+    height: image.height,
+  };
+}
+
+function cropRegion(imageFile, dir, field, size, pageCount = 3) {
+  const crop = {
+    x: Math.round(size.width * field.x),
+    y: Math.round(size.height * field.y),
+    width: Math.round(size.width * field.width),
+    height: Math.round(size.height * field.height),
+  };
+  const out = join(dir, `${field.key}.png`);
+  const source = PNG.sync.read(readFileSync(imageFile));
+
+  // --- LOCALIZADOR DINÁMICO ESTRUCTURAL 1D PARA VOTOS ---
+  if (field.key.startsWith("votos_")) {
+    try {
+      const startSearchY = Math.round(source.height * 0.70);
+      const endSearchY = Math.round(source.height * 0.95);
+
+      // 1. Escanear el ANCHO CENTRAL COMPLETO de la imagen (30%-70%) para detectar líneas
+      //    Las líneas de la grilla cruzan todo el formulario, así son mucho más fuertes
+      //    que cualquier trazo de lápiz o firma localizada.
+      const scanXStart = Math.round(source.width * 0.30);
+      const scanXEnd = Math.round(source.width * 0.70);
+      const scanWidth = scanXEnd - scanXStart;
+
+      const rowSums = Array(source.height).fill(0);
+      for (let y = startSearchY; y < endSearchY; y++) {
+        for (let x = scanXStart; x < scanXEnd; x++) {
+          const idx = (source.width * y + x) << 2;
+          const gray =
+            source.data[idx] * 0.299 +
+            source.data[idx + 1] * 0.587 +
+            source.data[idx + 2] * 0.114;
+          if (gray < 140) rowSums[y]++;
+        }
+      }
+
+      // 2. Detectar picos — solo líneas horizontales que cubren al menos 25% del ancho escaneado (umbral menor para tolerancia a firmas/ruido)
+      const lineThreshold = scanWidth * 0.25;
+      const detectedLines = [];
+
+      for (let y = startSearchY + 3; y < endSearchY - 3; y++) {
+        if (rowSums[y] > lineThreshold) {
+          // Verificar que es un máximo local (±3 px)
+          let isMax = true;
+          for (let dy = -3; dy <= 3; dy++) {
+            if (dy !== 0 && rowSums[y + dy] > rowSums[y]) {
+              isMax = false;
+              break;
+            }
+          }
+          if (isMax) {
+            // Distancia mínima de separación para detectar líneas consecutivas (proporcional al alto)
+            const minLineSeparation = Math.round(source.height * 0.0045); // aprox 20px en H=4347
+            if (detectedLines.length === 0 || y - detectedLines[detectedLines.length - 1] > minLineSeparation) {
+              detectedLines.push(y);
+            }
+          }
+        }
+      }
+
+      console.log(`[OCR Dynamic Grid] Field: ${field.key} | H: ${source.height} | fullWidth detectedLines:`, detectedLines);
+
+      // Calcular límites de gaps adaptativamente según pageCount para excluir líneas de dígitos internas
+      const minGap = pageCount === 2 ? 110 : 35;
+      const maxGap = pageCount === 2 ? 165 : 85;
+      const maxGapDiff = pageCount === 2 ? 20 : 12;
+
+      // 3. Buscar la grilla de celdas uniformes (4 o 5 líneas) y seleccionar la celda más cercana al centro teórico del campo
+      const targetCenterTheory = crop.y + crop.height / 2;
+
+      let bestGridCell = null;
+      let minDistance = Infinity;
+
+      // Buscar combinaciones de 5 líneas (subsecuencia)
+      for (let i = 0; i < detectedLines.length; i++) {
+        const y0 = detectedLines[i];
+        for (let j = i + 1; j < detectedLines.length; j++) {
+          const y1 = detectedLines[j];
+          const g0 = y1 - y0;
+          if (g0 < minGap || g0 > maxGap) continue;
+          for (let k = j + 1; k < detectedLines.length; k++) {
+            const y2 = detectedLines[k];
+            const g1 = y2 - y1;
+            if (g1 < minGap || g1 > maxGap || Math.abs(g1 - g0) > maxGapDiff) continue;
+            for (let l = k + 1; l < detectedLines.length; l++) {
+              const y3 = detectedLines[l];
+              const g2 = y3 - y2;
+              if (g2 < minGap || g2 > maxGap || Math.abs(g2 - g1) > maxGapDiff || Math.abs(g2 - g0) > maxGapDiff) continue;
+              for (let m = l + 1; m < detectedLines.length; m++) {
+                const y4 = detectedLines[m];
+                const g3 = y4 - y3;
+                if (g3 < minGap || g3 > maxGap || Math.abs(g3 - g2) > maxGapDiff || Math.abs(g3 - g1) > maxGapDiff || Math.abs(g3 - g0) > maxGapDiff) continue;
+
+                // Evaluar las 4 celdas formadas
+                const celdas = [
+                  [y0, y1],
+                  [y1, y2],
+                  [y2, y3],
+                  [y3, y4]
+                ];
+                for (const [yA, yB] of celdas) {
+                  const cellCenter = (yA + yB) / 2;
+                  const dist = Math.abs(cellCenter - targetCenterTheory);
+                  if (dist < minDistance) {
+                    minDistance = dist;
+                    bestGridCell = { yStart: yA, yEnd: yB, grid: [y0, y1, y2, y3, y4] };
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Fallback: Buscar combinaciones de 4 líneas (subsecuencia)
+      if (!bestGridCell || minDistance > 60) {
+        for (let i = 0; i < detectedLines.length; i++) {
+          const y0 = detectedLines[i];
+          for (let j = i + 1; j < detectedLines.length; j++) {
+            const y1 = detectedLines[j];
+            const g0 = y1 - y0;
+            if (g0 < minGap || g0 > maxGap) continue;
+            for (let k = j + 1; k < detectedLines.length; k++) {
+              const y2 = detectedLines[k];
+              const g1 = y2 - y1;
+              if (g1 < minGap || g1 > maxGap || Math.abs(g1 - g0) > maxGapDiff) continue;
+              for (let l = k + 1; l < detectedLines.length; l++) {
+                const y3 = detectedLines[l];
+                const g2 = y3 - y2;
+                if (g2 < minGap || g2 > maxGap || Math.abs(g2 - g1) > maxGapDiff || Math.abs(g2 - g0) > maxGapDiff) continue;
+
+                // Evaluar las 3 celdas formadas
+                const celdas = [
+                  [y0, y1],
+                  [y1, y2],
+                  [y2, y3]
+                ];
+                for (const [yA, yB] of celdas) {
+                  const cellCenter = (yA + yB) / 2;
+                  const dist = Math.abs(cellCenter - targetCenterTheory);
+                  if (dist < minDistance) {
+                    minDistance = dist;
+                    bestGridCell = { yStart: yA, yEnd: yB, grid: [y0, y1, y2, y3] };
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (bestGridCell && minDistance <= 60) {
+        console.log(`[OCR Dynamic Grid Debug] Field: ${field.key} | crop.y=${crop.y} | crop.height=${crop.height} | targetCenterTheory=${targetCenterTheory.toFixed(1)}`);
+        console.log(`[OCR Dynamic Grid] SUCCESS! Field: ${field.key} | Grid: [${bestGridCell.grid.join(', ')}] | Selected cell: [${bestGridCell.yStart}, ${bestGridCell.yEnd}] (dist: ${minDistance.toFixed(1)}px)`);
+        const cellCenter = (bestGridCell.yStart + bestGridCell.yEnd) / 2;
+        crop.y = Math.round(cellCenter - 25);
+        crop.height = 50;
+        console.log(`  => Centered Y: ${crop.y} (center: ${cellCenter.toFixed(1)})`);
+      } else {
+        console.log(`[OCR Dynamic Grid Debug] FAILED Field: ${field.key} | crop.y=${crop.y} | crop.height=${crop.height} | targetCenterTheory=${targetCenterTheory.toFixed(1)}`);
+        console.log(`[OCR Dynamic Grid] FAILED to detect grid or too far. Using calibrated coordinates (dist: ${minDistance.toFixed(1)}px).`);
+        crop.height = 50;
+      }
+    } catch (err) {
+      console.error("[OCR Dynamic Grid] Error during search:", err);
+      crop.height = 50;
+    }
+  } else {
+    // --- REFINAMIENTO TRADICIONAL DE BORDES HORIZONTALES PARA CANDIDATOS ---
+    try {
+      const xStart = crop.x;
+      const xEnd = crop.x + crop.width;
+      const yStart = crop.y;
+      const yEnd = crop.y + crop.height;
+
+      const getRowDensity = (png, y) => {
+        let dark = 0;
+        for (let x = xStart; x < xEnd; x++) {
+          const idx = (png.width * y + x) << 2;
+          const gray =
+            png.data[idx] * 0.299 +
+            png.data[idx + 1] * 0.587 +
+            png.data[idx + 2] * 0.114;
+          if (gray < 160) dark++;
+        }
+        return dark;
+      };
+
+      const findHorizontalLine = (png, ySearch, range = 45) => {
+        let maxDensity = 0;
+        let bestY = null;
+        const colWidth = xEnd - xStart;
+        const minDensityThreshold = colWidth * 0.20; // Reducido del 35% al 20% para mayor tolerancia
+
+        for (let y = ySearch - range; y <= ySearch + range; y++) {
+          if (y < 0 || y >= png.height) continue;
+          const density = getRowDensity(png, y);
+          if (density > maxDensity && density > minDensityThreshold) {
+            maxDensity = density;
+            bestY = y;
+          }
+        }
+        return bestY;
+      };
+
+      const refinedTop = findHorizontalLine(source, yStart, 40);
+      const refinedBottom = findHorizontalLine(source, yEnd, 40);
+
+      console.log(`[OCR Refine] Field: ${field.key} | yStart: ${yStart}, yEnd: ${yEnd} | refinedTop: ${refinedTop}, refinedBottom: ${refinedBottom}`);
+
+      if (refinedTop !== null && refinedBottom !== null) {
+        crop.y = Math.round((refinedTop + refinedBottom) / 2 - crop.height / 2);
+        console.log(`  => Centered Y: ${crop.y} (offset: ${crop.y - yStart})`);
+      } else if (refinedTop !== null) {
+        crop.y = refinedTop + 6;
+        console.log(`  => Top-anchored Y: ${crop.y} (offset: ${crop.y - yStart})`);
+      } else if (refinedBottom !== null) {
+        crop.y = refinedBottom - crop.height - 6;
+        console.log(`  => Bottom-anchored Y: ${crop.y} (offset: ${crop.y - yStart})`);
+      } else {
+        console.log(`  => Fallback Y (no lines found): ${crop.y}`);
+      }
+    } catch (err) {
+      console.error("  => ERROR IN REFINEMENT LOCAL Y:", err);
+    }
+  }
+  // -----------------------------------------------------------------
+
+  const cropped = new PNG({ width: crop.width, height: crop.height });
+
+  for (let y = 0; y < crop.height; y++) {
+    for (let x = 0; x < crop.width; x++) {
+      const sourceX = crop.x + x;
+      const sourceY = crop.y + y;
+      const targetIndex = (crop.width * y + x) << 2;
+
+      if (
+        sourceX < 0 ||
+        sourceX >= source.width ||
+        sourceY < 0 ||
+        sourceY >= source.height
+      ) {
+        cropped.data[targetIndex] = 255;
+        cropped.data[targetIndex + 1] = 255;
+        cropped.data[targetIndex + 2] = 255;
+        cropped.data[targetIndex + 3] = 255;
+        continue;
+      }
+
+      const sourceIndex = (source.width * sourceY + sourceX) << 2;
+      cropped.data[targetIndex] = source.data[sourceIndex];
+      cropped.data[targetIndex + 1] = source.data[sourceIndex + 1];
+      cropped.data[targetIndex + 2] = source.data[sourceIndex + 2];
+      cropped.data[targetIndex + 3] = source.data[sourceIndex + 3];
+    }
+  }
+
+  writeFileSync(out, PNG.sync.write(cropped));
+
+  return { file: out, crop };
+}
+
+function keepOcrDebugImage(file, debugDir, name) {
+  ensureDir(debugDir);
+  copyFileSync(file, join(debugDir, name));
+}
+
+const onnxSessions = new Map();
+
+function readGray(png, x, y) {
+  const index = (png.width * y + x) << 2;
+
+  return (
+    png.data[index] * 0.299 +
+    png.data[index + 1] * 0.587 +
+    png.data[index + 2] * 0.114
+  );
+}
+
+function binarizePng(png, threshold = 170) {
+  const pixels = Array.from({ length: png.height }, () =>
+    Array(png.width).fill(0),
+  );
+
+  const marginY = 4;
+  const marginX = 4;
+
+  for (let y = 0; y < png.height; y++) {
+    for (let x = 0; x < png.width; x++) {
+      if (
+        y < marginY ||
+        y >= png.height - marginY ||
+        x < marginX ||
+        x >= png.width - marginX
+      ) {
+        pixels[y][x] = 0;
+      } else {
+        pixels[y][x] = readGray(png, x, y) < threshold ? 1 : 0;
+      }
+    }
+  }
+
+  return pixels;
+}
+
+function connectedComponents(pixels) {
+  const height = pixels.length;
+  const width = pixels[0]?.length || 0;
+  const seen = Array.from({ length: height }, () => Array(width).fill(false));
+  const components = [];
+  const directions = [];
+
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (dx || dy) directions.push([dx, dy]);
+    }
+  }
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!pixels[y][x] || seen[y][x]) continue;
+
+      const queue = [[x, y]];
+      const component = {
+        minX: x,
+        maxX: x,
+        minY: y,
+        maxY: y,
+        area: 0,
+      };
+      seen[y][x] = true;
+
+      for (let i = 0; i < queue.length; i++) {
+        const [cx, cy] = queue[i];
+        component.area++;
+        component.minX = Math.min(component.minX, cx);
+        component.maxX = Math.max(component.maxX, cx);
+        component.minY = Math.min(component.minY, cy);
+        component.maxY = Math.max(component.maxY, cy);
+
+        for (const [dx, dy] of directions) {
+          const nx = cx + dx;
+          const ny = cy + dy;
+
+          if (
+            nx < 0 ||
+            nx >= width ||
+            ny < 0 ||
+            ny >= height ||
+            seen[ny][nx] ||
+            !pixels[ny][nx]
+          ) {
+            continue;
+          }
+
+          seen[ny][nx] = true;
+          queue.push([nx, ny]);
+        }
+      }
+
+      component.width = component.maxX - component.minX + 1;
+      component.height = component.maxY - component.minY + 1;
+      components.push(component);
+    }
+  }
+
+  return components;
+}
+
+function digitComponents(pixels, width, height) {
+  return mergeDigitFragments(
+    connectedComponents(pixels)
+      .filter((component) => component.area > 10)
+      .filter(
+        (component) =>
+          component.minX > 3 &&
+          component.maxX < width - 4 &&
+          component.minY > 2 &&
+          component.maxY < height - 3 &&
+          component.width < width * 0.5 &&
+          component.height < height * 0.85,
+      )
+      .sort((a, b) => a.minX - b.minX),
+  );
+}
+
+function mergeDigitFragments(components) {
+  const merged = [];
+
+  for (const component of components) {
+    const previous = merged[merged.length - 1];
+    if (!previous) {
+      merged.push({ ...component });
+      continue;
+    }
+
+    const gap = component.minX - previous.maxX - 1;
+    const yOverlap =
+      Math.min(previous.maxY, component.maxY) -
+      Math.max(previous.minY, component.minY) +
+      1;
+    const hasSmallFragment = Math.min(previous.area, component.area) < 25;
+
+    if (hasSmallFragment && gap <= 4 && yOverlap > 0) {
+      previous.minX = Math.min(previous.minX, component.minX);
+      previous.maxX = Math.max(previous.maxX, component.maxX);
+      previous.minY = Math.min(previous.minY, component.minY);
+      previous.maxY = Math.max(previous.maxY, component.maxY);
+      previous.area += component.area;
+      previous.width = previous.maxX - previous.minX + 1;
+      previous.height = previous.maxY - previous.minY + 1;
+      continue;
+    }
+
+    merged.push({ ...component });
+  }
+
+  return merged;
+}
+
+function writeMnistDigitImage(pixels, component, file) {
+  const size = 64;
+  const padding = 10;
+  const out = new PNG({ width: size, height: size });
+
+  for (let i = 0; i < out.data.length; i += 4) {
+    out.data[i] = 0;
+    out.data[i + 1] = 0;
+    out.data[i + 2] = 0;
+    out.data[i + 3] = 255;
+  }
+
+  const scale = Math.min(
+    (size - padding * 2) / component.width,
+    (size - padding * 2) / component.height,
+  );
+  const targetWidth = Math.max(1, Math.round(component.width * scale));
+  const targetHeight = Math.max(1, Math.round(component.height * scale));
+  const offsetX = Math.floor((size - targetWidth) / 2);
+  const offsetY = Math.floor((size - targetHeight) / 2);
+
+  for (let y = component.minY; y <= component.maxY; y++) {
+    for (let x = component.minX; x <= component.maxX; x++) {
+      if (!pixels[y][x]) continue;
+
+      const tx = Math.min(
+        size - 1,
+        Math.max(
+          0,
+          offsetX +
+            Math.floor(((x - component.minX) / component.width) * targetWidth),
+        ),
+      );
+      const ty = Math.min(
+        size - 1,
+        Math.max(
+          0,
+          offsetY +
+            Math.floor(
+              ((y - component.minY) / component.height) * targetHeight,
+            ),
+        ),
+      );
+
+      for (
+        let yy = Math.max(0, ty - 1);
+        yy <= Math.min(size - 1, ty + 1);
+        yy++
+      ) {
+        for (
+          let xx = Math.max(0, tx - 1);
+          xx <= Math.min(size - 1, tx + 1);
+          xx++
+        ) {
+          const index = (size * yy + xx) << 2;
+          out.data[index] = 255;
+          out.data[index + 1] = 255;
+          out.data[index + 2] = 255;
+          out.data[index + 3] = 255;
+        }
+      }
+    }
+  }
+
+  writeFileSync(file, PNG.sync.write(out));
+}
+
+function parseDigitLabel(label) {
+  const match = String(label ?? "").match(/\d/);
+
+  return match ? match[0] : "";
+}
+
+function bestDigitPredictionFromOnnx(outputData) {
+  let maxIdx = 0;
+  let maxVal = -Infinity;
+  for (let i = 0; i < outputData.length; i++) {
+    if (outputData[i] > maxVal) {
+      maxVal = outputData[i];
+      maxIdx = i;
+    }
+  }
+
+  const exps = Array.from(outputData).map((v) => Math.exp(v));
+  const sumExps = exps.reduce((a, b) => a + b, 0);
+  const prob = sumExps > 0 ? exps[maxIdx] / sumExps : 0;
+
+  return {
+    digit: String(maxIdx),
+    score: prob,
+  };
+}
+
+async function downloadMnistModelIfMissing(destPath) {
+  if (existsSync(destPath)) return;
+
+  ensureDir(dirname(destPath));
+  const modelUrl =
+    "https://huggingface.co/Kalray/mnist/resolve/main/mnist.onnx";
+  console.log(`Downloading MNIST model from ${modelUrl}...`);
+
+  const res = await fetch(modelUrl);
+  if (!res.ok) {
+    throw new Error(
+      `Failed to download MNIST model: ${res.statusText} (${res.status})`,
+    );
+  }
+
+  const buffer = Buffer.from(await res.arrayBuffer());
+  writeFileSync(destPath, buffer);
+  console.log("Model downloaded successfully.");
+}
+
+async function getOnnxSession(args = {}) {
+  let modelPath;
+  const isElectron = !!(process.versions && process.versions.electron);
+
+  let resourcesModelPath = null;
+  if (isElectron && process.resourcesPath) {
+    resourcesModelPath = join(process.resourcesPath, "models", "mnist.onnx");
+  }
+
+  if (resourcesModelPath && existsSync(resourcesModelPath)) {
+    modelPath = resourcesModelPath;
+  } else if (process.env.E14_OCR_LOCAL_MODEL_PATH) {
+    modelPath = join(process.env.E14_OCR_LOCAL_MODEL_PATH, "mnist.onnx");
+  } else {
+    modelPath = join(args.out || DEFAULT_OUT, "models", "mnist.onnx");
+  }
+
+  if (!args.ocrLocalOnly && modelPath !== resourcesModelPath) {
+    await downloadMnistModelIfMissing(modelPath);
+  }
+
+  if (!existsSync(modelPath)) {
+    throw new Error(
+      `Modelo ONNX de MNIST no encontrado en la ruta: ${modelPath}`,
+    );
+  }
+
+  const cacheKey = modelPath;
+  if (!onnxSessions.has(cacheKey)) {
+    const session = await ort.InferenceSession.create(modelPath);
+    onnxSessions.set(cacheKey, session);
+  }
+
+  return onnxSessions.get(cacheKey);
+}
+
+function isAsterisk(pixels, component) {
+  const w = component.maxX - component.minX + 1;
+  const h = component.maxY - component.minY + 1;
+
+  if (w < 8 || h < 8) return false;
+
+  const midX = component.minX + w / 2;
+  const midY = component.minY + h / 2;
+
+  let qTL = 0,
+    qTR = 0,
+    qBL = 0,
+    qBR = 0;
+  let total = 0;
+
+  for (let y = component.minY; y <= component.maxY; y++) {
+    for (let x = component.minX; x <= component.maxX; x++) {
+      if (pixels[y][x]) {
+        total++;
+        if (x < midX && y < midY) qTL++;
+        else if (x >= midX && y < midY) qTR++;
+        else if (x < midX && y >= midY) qBL++;
+        else if (x >= midX && y >= midY) qBR++;
+      }
+    }
+  }
+
+  if (total === 0) return false;
+
+  const pTL = qTL / total;
+  const pTR = qTR / total;
+  const pBL = qBL / total;
+  const pBR = qBR / total;
+
+  const minProp = Math.min(pTL, pTR, pBL, pBR);
+  const aspect = w / h;
+  const density = total / (w * h);
+
+  // Asterisco (*) o Cruz (X) manuscritos de tachado:
+  // Tienen píxeles distribuidos de forma uniforme en los 4 cuadrantes,
+  // con aspecto de bounding box razonablemente cuadrado y densidad relativamente alta.
+  return minProp >= 0.18 && aspect >= 0.75 && aspect <= 1.35 && density > 0.35;
+}
+
+function preprocessMnistDigitToTensor(pixels, component) {
+  const size = 28;
+  const padding = 4;
+  const data = new Float32Array(size * size).fill(0);
+
+  const scale = Math.min(
+    (size - padding * 2) / component.width,
+    (size - padding * 2) / component.height,
+  );
+  const targetWidth = Math.max(1, Math.round(component.width * scale));
+  const targetHeight = Math.max(1, Math.round(component.height * scale));
+  const offsetX = Math.floor((size - targetWidth) / 2);
+  const offsetY = Math.floor((size - targetHeight) / 2);
+
+  for (let y = component.minY; y <= component.maxY; y++) {
+    for (let x = component.minX; x <= component.maxX; x++) {
+      if (!pixels[y][x]) continue;
+
+      const tx = Math.min(
+        size - 1,
+        Math.max(
+          0,
+          offsetX +
+            Math.floor(((x - component.minX) / component.width) * targetWidth),
+        ),
+      );
+      const ty = Math.min(
+        size - 1,
+        Math.max(
+          0,
+          offsetY +
+            Math.floor(
+              ((y - component.minY) / component.height) * targetHeight,
+            ),
+        ),
+      );
+
+      data[size * ty + tx] = 1.0;
+    }
+  }
+
+  return data;
+}
+
+async function runTransformersDigitOcr(image, dir, field, args = {}) {
+  const png = PNG.sync.read(readFileSync(image));
+  const pixels = binarizePng(png);
+  const components = digitComponents(pixels, png.width, png.height);
+
+  if (!components.length) {
+    return { raw: "", confidence: 0, provider: "transformers" };
+  }
+
+  const session = await getOnnxSession(args);
+  const reads = [];
+
+  for (let i = 0; i < components.length; i++) {
+    // Si detectamos un asterisco o cruz de tachado manuscrito, lo omitimos
+    if (isAsterisk(pixels, components[i])) {
+      continue;
+    }
+
+    const digitFile = join(dir, `${field.key}-digit-${i + 1}.png`);
+    writeMnistDigitImage(pixels, components[i], digitFile);
+
+    if (args.keepOcrImages && args.debugDir) {
+      keepOcrDebugImage(
+        digitFile,
+        args.debugDir,
+        `${field.key}-digit-${i + 1}.png`,
+      );
+    }
+
+    const floatData = preprocessMnistDigitToTensor(pixels, components[i]);
+    const inputTensor = new ort.Tensor("float32", floatData, [1, 1, 28, 28]);
+
+    const feeds = { [session.inputNames[0]]: inputTensor };
+    const results = await session.run(feeds);
+    const outputData = results[session.outputNames[0]].data;
+
+    const prediction = bestDigitPredictionFromOnnx(outputData);
+    reads.push(prediction);
+  }
+
+  return {
+    raw: reads.map((read) => read.digit).join(""),
+    confidence: reads.length
+      ? Math.round(
+          reads.reduce((sum, read) => sum + read.score * 100, 0) / reads.length,
+        )
+      : 100, // 100% de confianza si todo el campo estaba tachado/vacío
+    provider: "transformers",
+  };
+}
+
+function runTesseract(image) {
+  const result = spawnSync(
+    "tesseract",
+    [
+      image,
+      "stdout",
+      "-l",
+      "snum",
+      "--psm",
+      "7",
+      "-c",
+      "tessedit_char_whitelist=0123456789*",
+      "tsv",
+    ],
+    { encoding: "utf8", timeout: 20000 },
+  );
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  if (result.status !== 0) {
+    throw new Error(result.stderr || "Tesseract no pudo leer la region");
+  }
+
+  return parseTesseractTsv(result.stdout);
+}
+
+async function readOcrRegion(image, dir, field, args = {}) {
+  if (!commandExists("tesseract")) {
+    throw new Error("OCR requiere tesseract instalado en el sistema");
+  }
+
+  const tesseractResult = runTesseract(image);
+
+  return {
+    raw: tesseractResult.raw,
+    confidence: tesseractResult.confidence,
+    provider: "tesseract",
+    tesseract: {
+      raw: tesseractResult.raw,
+      confidence: tesseractResult.confidence,
+    },
+    ai: {
+      raw: tesseractResult.raw,
+      confidence: tesseractResult.confidence,
+    },
+  };
+}
+
+function parseTesseractTsv(tsv) {
+  const lines = String(tsv || "")
+    .trim()
+    .split("\n");
+  const headers = lines.shift()?.split("\t") || [];
+  const textIndex = headers.indexOf("text");
+  const confIndex = headers.indexOf("conf");
+  const parts = [];
+  const confidences = [];
+
+  for (const line of lines) {
+    const cols = line.split("\t");
+    const text = cols[textIndex] || "";
+    const conf = Number(cols[confIndex]);
+
+    if (text.trim()) {
+      parts.push(text.trim());
+    }
+
+    if (Number.isFinite(conf) && conf >= 0) {
+      confidences.push(conf);
+    }
+  }
+
+  const raw = parts.join(" ");
+  const confidence = confidences.length
+    ? Math.round(
+        confidences.reduce((sum, value) => sum + value, 0) / confidences.length,
+      )
+    : 0;
+
+  return { raw, confidence };
+}
+
+function normalizeOcrNumber(raw) {
+  const text = String(raw || "").trim();
+  const digits = text.replace(/\*/g, "0").replace(/\D/g, "");
+
+  if (!digits) return null;
+
+  const normalized = digits.length > 3 ? digits.slice(-3) : digits;
+
+  return Number(normalized);
+}
+
+function emptyOcrValues() {
+  return Object.fromEntries(OCR_FIELDS_2PAGE.map((field) => [field.key, null]));
+}
+
+function ocrCsvRow(row) {
+  const headers = ocrResultHeaders();
+
+  return headers.map((header) => csvEscape(row[header])).join(",");
+}
+
+function ocrResultHeaders() {
+  return [
     "department",
     "departmentName",
     "municipality",
@@ -411,25 +1772,287 @@ function writeInventory(records, out) {
     "standName",
     "table",
     "corporation",
-    "acronym",
-    "status",
     "expectedName",
-    "relativePdfPath",
-    "pdfUrl",
+    "candidato_1",
+    "candidato_2",
+    "votos_blanco",
+    "votos_nulos",
+    "votos_no_marcados",
+    "total_votos_urna",
+    "raw_candidato_1",
+    "raw_candidato_2",
+    "raw_votos_blanco",
+    "raw_votos_nulos",
+    "raw_votos_no_marcados",
+    "raw_total_votos_urna",
+    "suma_votos",
+    "diferencia_total_urna",
+    "consistente",
+    "confianza_promedio",
+    "proveedor_ocr",
+    "requiere_revision",
+    "error",
+    "localPath",
   ];
-  const csv = [
-    headers.join(","),
-    ...records.map((r) => headers.map((h) => csvEscape(r[h])).join(",")),
-  ].join("\n");
-  writeFileSync(join(out, "inventory.csv"), csv);
-  writeFileSync(
-    join(out, "inventory.jsonl"),
-    records.map((r) => JSON.stringify(r)).join("\n") + "\n",
-  );
 }
 
-function localPdfPath(out, record) {
-  return join(out, "pdf", record.relativePdfPath);
+function flattenOcrRow(row) {
+  const trusted = row.ocr?.consistente;
+
+  return {
+    department: row.department,
+    departmentName: row.departmentName,
+    municipality: row.municipality,
+    municipalityName: row.municipalityName,
+    zone: row.zone,
+    zoneName: row.zoneName,
+    stand: row.stand,
+    standName: row.standName,
+    table: row.table,
+    corporation: row.corporation,
+    expectedName: row.expectedName,
+    candidato_1: trusted ? (row.ocr?.values?.candidato_1 ?? "") : "",
+    candidato_2: trusted ? (row.ocr?.values?.candidato_2 ?? "") : "",
+    votos_blanco: trusted ? (row.ocr?.values?.votos_blanco ?? "") : "",
+    votos_nulos: trusted ? (row.ocr?.values?.votos_nulos ?? "") : "",
+    votos_no_marcados: trusted
+      ? (row.ocr?.values?.votos_no_marcados ?? "")
+      : "",
+    total_votos_urna: trusted ? (row.ocr?.values?.total_votos_urna ?? "") : "",
+    raw_candidato_1: row.ocr?.fields?.candidato_1?.raw ?? "",
+    raw_candidato_2: row.ocr?.fields?.candidato_2?.raw ?? "",
+    raw_votos_blanco: row.ocr?.fields?.votos_blanco?.raw ?? "",
+    raw_votos_nulos: row.ocr?.fields?.votos_nulos?.raw ?? "",
+    raw_votos_no_marcados: row.ocr?.fields?.votos_no_marcados?.raw ?? "",
+    raw_total_votos_urna: row.ocr?.fields?.total_votos_urna?.raw ?? "",
+    suma_votos: row.ocr?.suma_votos ?? "",
+    diferencia_total_urna: row.ocr?.diferencia_total_urna ?? "",
+    consistente: row.ocr?.consistente ? "true" : "false",
+    confianza_promedio: row.ocr?.confianza_promedio ?? "",
+    proveedor_ocr: row.ocr?.proveedor ?? "",
+    requiere_revision: row.ocr?.requiere_revision ? "true" : "false",
+    error: row.error || "",
+    localPath: row.localPath || "",
+  };
+}
+
+function zoneSummaryRows(rows) {
+  const grouped = new Map();
+
+  for (const row of rows) {
+    if (!row.ocr?.consistente) continue;
+
+    const key = [
+      row.department,
+      row.departmentName,
+      row.municipality,
+      row.municipalityName,
+      row.zone,
+      row.zoneName,
+      row.stand,
+      row.standName,
+      row.corporation,
+    ].join("|");
+
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        department: row.department,
+        departmentName: row.departmentName,
+        municipality: row.municipality,
+        municipalityName: row.municipalityName,
+        zone: row.zone,
+        zoneName: row.zoneName,
+        stand: row.stand,
+        standName: row.standName,
+        corporation: row.corporation,
+        mesas_validadas: 0,
+        candidato_1: 0,
+        candidato_2: 0,
+        votos_blanco: 0,
+        votos_nulos: 0,
+        votos_no_marcados: 0,
+        total_votos_urna: 0,
+      });
+    }
+
+    const summary = grouped.get(key);
+    summary.mesas_validadas++;
+    for (const field of [
+      "candidato_1",
+      "candidato_2",
+      "votos_blanco",
+      "votos_nulos",
+      "votos_no_marcados",
+      "total_votos_urna",
+    ]) {
+      summary[field] += Number(row.ocr.values[field] || 0);
+    }
+  }
+
+  return [...grouped.values()];
+}
+function writeOcrOutputs(rows, out) {
+  const db = new LocalDatabase(out);
+  return db.saveOcrOutputs(rows);
+}
+
+function loadExistingOcrRows(out) {
+  const db = new LocalDatabase(out);
+  return db.loadOcr();
+}
+
+function recordKey(record) {
+  return [
+    record.department,
+    record.municipality,
+    record.zone,
+    record.stand,
+    record.table,
+    record.corporation,
+  ].join("|");
+}
+
+function validateOcrValues(values, confidences) {
+  const voteKeys = [
+    "candidato_1",
+    "candidato_2",
+    "votos_blanco",
+    "votos_nulos",
+    "votos_no_marcados",
+  ];
+  const missing = ["total_votos_urna", ...voteKeys].filter(
+    (key) => !Number.isFinite(values[key]),
+  );
+  const suma_votos = voteKeys.reduce(
+    (sum, key) => sum + (Number.isFinite(values[key]) ? values[key] : 0),
+    0,
+  );
+  const total = values.total_votos_urna;
+  const diferencia_total_urna = Number.isFinite(total)
+    ? suma_votos - total
+    : "";
+  const confianza_promedio = confidences.length
+    ? Math.round(
+        confidences.reduce((sum, value) => sum + value, 0) / confidences.length,
+      )
+    : 0;
+  const bajaConfianza = confianza_promedio < 60;
+  const consistente =
+    missing.length === 0 &&
+    Number(diferencia_total_urna) === 0 &&
+    !bajaConfianza;
+
+  return {
+    suma_votos,
+    diferencia_total_urna,
+    consistente,
+    confianza_promedio,
+    requiere_revision: !consistente,
+    missing,
+    baja_confianza: bajaConfianza,
+  };
+}
+
+async function ocrOne(record, out, args = {}) {
+  assertNotAborted(args.signal);
+  ensureOcrTools(args);
+  const provider = normalizeOcrProvider(args.ocrProvider);
+  const file = localPdfPath(out, record);
+  const base = {
+    ...record,
+    localPath: file,
+    ocr: {
+      values: emptyOcrValues(),
+      fields: {},
+      regions: {},
+      suma_votos: "",
+      diferencia_total_urna: "",
+      consistente: false,
+      confianza_promedio: 0,
+      requiere_revision: true,
+      proveedor: provider,
+    },
+  };
+
+  if (!existsSync(file)) {
+    return { ...base, error: `PDF local no encontrado: ${file}` };
+  }
+
+  const header = readFileSync(file).subarray(0, 5).toString();
+  if (header !== "%PDF-") {
+    return { ...base, error: "El archivo local no es un PDF valido" };
+  }
+
+  const dir = mkdtempSync(join(tmpdir(), "e14-ocr-"));
+
+  try {
+    const bytes = readFileSync(file);
+    const pdfDoc = await PDFDocument.load(bytes, {
+      ignoreEncryption: true,
+      updateMetadata: false,
+    });
+    const pageCount = pdfDoc.getPageCount();
+    const targetPage = pageCount === 3 ? 2 : 1;
+
+    const image = renderPdfPage(file, dir, targetPage);
+    const size = imageSize(image);
+    const debugDir = args.keepOcrImages ? ocrDebugDir(out, record) : "";
+
+    if (debugDir) {
+      keepOcrDebugImage(image, debugDir, "page.png");
+    }
+
+    const values = {};
+    const fields = {};
+    const regions = {};
+    const confidences = [];
+
+    const fieldsList = getAlignedOcrFields(image, pageCount);
+
+    for (const field of fieldsList) {
+      assertNotAborted(args.signal);
+      const crop = cropRegion(image, dir, field, size, pageCount);
+
+      if (debugDir) {
+        keepOcrDebugImage(crop.file, debugDir, `${field.key}.png`);
+      }
+
+      const read = await readOcrRegion(crop.file, dir, field, {
+        ...args,
+        debugDir,
+      });
+      const value = normalizeOcrNumber(read.raw);
+      values[field.key] = value;
+      fields[field.key] = {
+        label: field.label,
+        raw: read.raw,
+        value,
+        confidence: read.confidence,
+        provider: read.provider,
+        tesseract: read.tesseract,
+        ai: read.ai,
+      };
+      regions[field.key] = crop.crop;
+      confidences.push(read.confidence);
+    }
+
+    const validation = validateOcrValues(values, confidences);
+
+    return {
+      ...base,
+      ocr: {
+        values,
+        fields,
+        regions,
+        proveedor: provider,
+        ...validation,
+      },
+    };
+  } catch (error) {
+    return { ...base, error: error.message };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 async function downloadOne(record, out, args) {
@@ -626,6 +2249,131 @@ async function runVerification(records, args, onRow = () => {}) {
   return { auditFile, failed, total: records.length, done, canceled: false };
 }
 
+async function runOcr(records, args, onRow = () => {}) {
+  ensureDir(args.out);
+  writeInventory(records, args.out);
+
+  const rowsByKey = loadExistingOcrRows(args.out);
+  let done = 0;
+  let failed = 0;
+  let consistent = 0;
+  let needsReview = 0;
+  let skipped = 0;
+
+  try {
+    await mapLimit(records, args.concurrency, async (record) => {
+      assertNotAborted(args.signal);
+      const key = recordKey(record);
+
+      if (args.skipExisting && rowsByKey.has(key)) {
+        const row = rowsByKey.get(key);
+        skipped++;
+        done++;
+
+        if (row.error) failed++;
+        if (row.ocr?.consistente) consistent++;
+        if (row.ocr?.requiere_revision) needsReview++;
+
+        onRow({
+          type: "row",
+          done,
+          failed,
+          consistent,
+          needsReview,
+          skipped,
+          total: records.length,
+          row,
+        });
+
+        return;
+      }
+
+      try {
+        const row = await ocrOne(record, args.out, args);
+        rowsByKey.set(key, row);
+        done++;
+
+        if (row.error) failed++;
+        if (row.ocr?.consistente) consistent++;
+        if (row.ocr?.requiere_revision) needsReview++;
+
+        onRow({
+          type: "row",
+          done,
+          failed,
+          consistent,
+          needsReview,
+          skipped,
+          total: records.length,
+          row,
+        });
+      } catch (error) {
+        if (isAbortError(error) || args.signal?.aborted) {
+          throw error;
+        }
+
+        failed++;
+        needsReview++;
+        done++;
+
+        const row = {
+          ...record,
+          localPath: localPdfPath(args.out, record),
+          error: error.message,
+          ocr: {
+            values: emptyOcrValues(),
+            consistente: false,
+            confianza_promedio: 0,
+            proveedor: normalizeOcrProvider(args.ocrProvider),
+            requiere_revision: true,
+          },
+        };
+
+        rowsByKey.set(key, row);
+        onRow({
+          type: "row",
+          done,
+          failed,
+          consistent,
+          needsReview,
+          skipped,
+          total: records.length,
+          row,
+        });
+      }
+    });
+  } catch (error) {
+    const rows = [...rowsByKey.values()];
+    const output = writeOcrOutputs(rows, args.out);
+
+    if (isAbortError(error) || args.signal?.aborted) {
+      return {
+        ...output,
+        failed,
+        consistent,
+        needsReview,
+        skipped,
+        total: records.length,
+        done,
+        canceled: true,
+      };
+    }
+
+    throw error;
+  }
+
+  return {
+    ...writeOcrOutputs([...rowsByKey.values()], args.out),
+    failed,
+    consistent,
+    needsReview,
+    skipped,
+    total: records.length,
+    done,
+    canceled: false,
+  };
+}
+
 async function readMetadata(file, buffer = readFileSync(file)) {
   const metadata = {
     ...readLocalPdfMetadata(file, buffer),
@@ -820,6 +2568,7 @@ function usage() {
   node scripts/e14-audit.mjs inventory [filters]
   node scripts/e14-audit.mjs download [filters]
   node scripts/e14-audit.mjs verify [filters]
+  node scripts/e14-audit.mjs ocr [filters]
 
 Filters:
   --department 60        Departamento, 2 digits after padding
@@ -833,6 +2582,11 @@ Filters:
   --base-url URL         Source site, defaults to Registraduria E14 Presidente
   --no-metadata          Skip exiftool metadata extraction
   --no-skip-existing     Re-download existing PDFs
+  --keep-ocr-images      Keep OCR page render and field crops under out/ocr-debug
+  --ocr-provider transformers
+                         OCR provider: transformers or tesseract
+  --ocr-model MODEL      Transformers.js model id or local ONNX model path
+  --ocr-local-only       Do not download remote Transformers.js model files
 `);
 }
 
@@ -842,7 +2596,7 @@ async function main() {
 
     if (args.command === "help") return usage();
 
-    if (!["inventory", "download", "verify"].includes(args.command))
+    if (!["inventory", "download", "verify", "ocr"].includes(args.command))
       throw new Error(`Unknown command: ${args.command}`);
 
     ensureDir(args.out);
@@ -857,21 +2611,31 @@ async function main() {
       return;
     }
 
-    const runner = args.command === "verify" ? runVerification : runDownload;
+    const runner =
+      args.command === "verify"
+        ? runVerification
+        : args.command === "ocr"
+          ? runOcr
+          : runDownload;
     const { auditFile, failed } = await runner(
       records,
       args,
       ({ done, total }) => {
         if (done % 25 === 0 || done === total) {
           console.log(
-            `${args.command === "verify" ? "Verified" : "Downloaded/audited"} ${done}/${total}`,
+            `${args.command === "verify" ? "Verified" : args.command === "ocr" ? "OCR" : "Downloaded/audited"} ${done}/${total}`,
           );
         }
       },
     );
 
-    console.log(`Audit: ${auditFile}`);
-    console.log(`PDF dir: ${join(args.out, "pdf")}`);
+    if (args.command === "ocr") {
+      console.log(`OCR results: ${join(args.out, "ocr-results.csv")}`);
+      console.log(`OCR summary: ${join(args.out, "ocr-zone-summary.csv")}`);
+    } else {
+      console.log(`Audit: ${auditFile}`);
+      console.log(`PDF dir: ${join(args.out, "pdf")}`);
+    }
     console.log(`Failures: ${failed}`);
   } finally {
     await exiftool.end();
@@ -887,11 +2651,13 @@ export {
   normalizeBaseUrl,
   pad,
   recordsFromData,
+  runOcr,
   runVerification,
   runDownload,
   temisUrl,
   verifyOne,
   writeInventory,
+  LocalDatabase,
 };
 
 if (import.meta.url === `file://${process.argv[1]}`) {
