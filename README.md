@@ -1,36 +1,63 @@
-<p align="center">
-  <img src="docs/logo.png" alt="Auditoria E14" width="120" />
-</p>
+<div align="center">
+  <img src="docs/logo.png" alt="Auditoria E14 Logo" width="220" />
+  <h1>Auditoria E14</h1>
+  <p><b>Inventario, descarga, auditoria de metadatos y OCR local para formularios E14</b></p>
 
-# Auditoria formularios E14 Registraduria
+  <p>
+    <a href="https://nodejs.org/" target="_blank" rel="noopener noreferrer">
+      <img src="https://img.shields.io/badge/Node.js-18%2B-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node.js 18+" />
+    </a>
+    <a href="https://www.electronjs.org/" target="_blank" rel="noopener noreferrer">
+      <img src="https://img.shields.io/badge/Electron-v37.10-47848f?style=flat-square&logo=electron&logoColor=white" alt="Electron" />
+    </a>
+    <a href="https://pnpm.io/" target="_blank" rel="noopener noreferrer">
+      <img src="https://img.shields.io/badge/pnpm-v10.33-orange?style=flat-square&logo=pnpm&logoColor=white" alt="pnpm" />
+    </a>
+    <a href="https://exiftool.org/" target="_blank" rel="noopener noreferrer">
+      <img src="https://img.shields.io/badge/ExifTool-v36.0-5c6bc0?style=flat-square" alt="ExifTool" />
+    </a>
+    <a href="https://github.com/xenova/transformers.js" target="_blank" rel="noopener noreferrer">
+      <img src="https://img.shields.io/badge/Transformers.js-v2.17-ffcc00?style=flat-square" alt="Transformers.js" />
+    </a>
+    <a href="https://opensource.org/license/mit" target="_blank" rel="noopener noreferrer">
+      <img src="https://img.shields.io/badge/License-MIT-brightgreen?style=flat-square" alt="MIT License" />
+    </a>
+  </p>
+</div>
 
-App local para inventariar, descargar y auditar metadatos de formularios E14 publicados por la Registraduria.
+---
 
-Sitio fuente:
+**Auditoria E14** es una aplicacion local para inventariar, descargar y auditar formularios E14 publicados por la Registraduria.
+
+La app usa los JSON y PDFs del sitio publico, calcula hashes SHA-256, extrae metadata con `pdf-lib` y `ExifTool`, permite revisar los resultados en una interfaz web o de escritorio con Electron, y puede ejecutar OCR local para extraer votos desde PDFs ya descargados.
+
+Fuente por defecto:
 
 ```text
 https://e14segundavueltapresidente.registraduria.gov.co/home
 ```
 
-## Descargas (Última versión)
+---
 
-Los instaladores y ejecutables son generados automáticamente por el pipeline de GitHub Actions en cada versión.
+## Descargas
 
-| Sistema Operativo                                                                                                                       | Formato     | Enlace de Descarga                                                                                                        |
-| :-------------------------------------------------------------------------------------------------------------------------------------- | :---------- | :------------------------------------------------------------------------------------------------------------------------ |
-| <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/apple/apple-original.svg" width="32" height="32" /> **macOS**              | `.dmg`      | [Descargar para macOS](https://github.com/Caxvalencia/audit-e14/releases/latest/download/Auditoria.E14-mac.dmg)   |
-| <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/windows8/windows8-original.svg" width="32" height="32" /> **Windows**      | `.exe`      | [Descargar para Windows](https://github.com/Caxvalencia/audit-e14/releases/latest/download/Auditoria.E14.Setup.exe) |
-| <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/linux/linux-original.svg" width="32" height="32" /> **Linux (AppImage)**   | `.AppImage` | [Descargar AppImage](https://github.com/Caxvalencia/audit-e14/releases/latest/download/Auditoria.E14.AppImage)      |
-| <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/linux/linux-original.svg" width="32" height="32" /> **Linux (Deb/Ubuntu)** | `.deb`      | [Descargar .deb](https://github.com/Caxvalencia/audit-e14/releases/latest/download/audit-e-14_amd64.deb)            |
+Los instaladores y ejecutables son generados automaticamente por el pipeline de GitHub Actions en cada version.
+
+| Sistema Operativo | Formato | Enlace de Descarga |
+| :-- | :-- | :-- |
+| <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/apple/apple-original.svg" width="32" height="32" /> **macOS** | `.dmg` | [Descargar para macOS](https://github.com/Caxvalencia/audit-e14/releases/latest/download/Auditoria.E14-mac.dmg) |
+| <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/windows8/windows8-original.svg" width="32" height="32" /> **Windows** | `.exe` | [Descargar para Windows](https://github.com/Caxvalencia/audit-e14/releases/latest/download/Auditoria.E14.Setup.exe) |
+| <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/linux/linux-original.svg" width="32" height="32" /> **Linux AppImage** | `.AppImage` | [Descargar AppImage](https://github.com/Caxvalencia/audit-e14/releases/latest/download/Auditoria.E14.AppImage) |
+| <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/linux/linux-original.svg" width="32" height="32" /> **Linux Deb/Ubuntu** | `.deb` | [Descargar .deb](https://github.com/Caxvalencia/audit-e14/releases/latest/download/audit-e-14_amd64.deb) |
 
 > [!NOTE]
-> Puedes encontrar todos los compilados y versiones previas en la sección de [Releases de GitHub](https://github.com/Caxvalencia/audit-e14/releases).
+> Puedes encontrar todos los compilados y versiones previas en la seccion de [Releases de GitHub](https://github.com/Caxvalencia/audit-e14/releases).
 
 > [!WARNING]
 > **Para usuarios de macOS (Gatekeeper / Quarantine):**
-> Al abrir la aplicación en macOS, es posible que el sistema muestre una alerta indicando que _"la aplicación está dañada y no puede abrirse"_. Esto es un mecanismo de seguridad estándar de macOS debido a que el binario de GitHub Actions se compila sin firma digital de desarrollador Apple (sin firma de pago).
+> Al abrir la aplicacion en macOS, es posible que el sistema muestre una alerta indicando que _"la aplicacion esta danada y no puede abrirse"_. Esto es un mecanismo de seguridad estandar de macOS porque el binario de GitHub Actions se compila sin firma digital de desarrollador Apple.
 >
-> Para solucionar esto y abrir la app, ejecuta el siguiente comando en tu terminal (después de arrastrar el icono a tu carpeta de _Aplicaciones_):
+> Para solucionarlo, ejecuta este comando despues de arrastrar la app a la carpeta de _Aplicaciones_:
 >
 > ```bash
 > xattr -cr "/Applications/Auditoria E14.app"
@@ -47,7 +74,7 @@ Desde esta carpeta:
 
 ```bash
 pnpm install
-node server.mjs
+pnpm start
 ```
 
 Abrir:
@@ -59,7 +86,7 @@ http://localhost:4173
 Para cambiar el puerto:
 
 ```bash
-PORT=5000 node server.mjs
+PORT=5000 pnpm start
 ```
 
 ## Aplicacion de escritorio
