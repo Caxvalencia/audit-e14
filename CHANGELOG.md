@@ -4,6 +4,8 @@ Todos los cambios relevantes del proyecto se documentan en este archivo.
 
 ## Unreleased
 
+## 1.1.3 - 2026-06-29
+
 ### Agregado
 
 - Nuevo flujo OCR local para extraer votos por mesa desde PDFs E14 existentes.
@@ -17,6 +19,7 @@ Todos los cambios relevantes del proyecto se documentan en este archivo.
 
 ### Cambiado
 
+- Renovado el README con encabezado visual, logo centrado, badges del stack y descripcion actualizada del proyecto.
 - El OCR usa `Transformers.js` como proveedor por defecto y mantiene `tesseract` como alternativa.
 - El OCR conserva resultados previos de `ocr-results.jsonl` y omite mesas ya procesadas cuando `skipExisting` esta activo.
 - Las columnas numericas OCR del CSV y de la tabla solo se llenan para mesas consistentes; las lecturas dudosas quedan en columnas `raw_*`.
