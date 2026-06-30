@@ -17,6 +17,9 @@ importers:
       exiftool-vendored:
         specifier: 36.0.0
         version: 36.0.0
+      onnxruntime-node:
+        specifier: 1.14.0
+        version: 1.14.0
       pdf-lib:
         specifier: 1.17.1
         version: 1.17.1

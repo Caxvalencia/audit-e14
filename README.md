@@ -146,10 +146,10 @@ Extraccion OCR de votos desde PDFs locales ya descargados:
 node scripts/e14-audit.mjs ocr --department 60 --municipality 010 --zone 00 --stand 00 --limit 3
 ```
 
-OCR con modelo de digitos manuscritos usando Transformers.js:
+OCR con modelo local ONNX para digitos manuscritos:
 
 ```bash
-node scripts/e14-audit.mjs ocr --department 60 --municipality 010 --zone 00 --stand 00 --limit 3 --ocr-provider transformers --ocr-model super-j/vit-base-mnist
+node scripts/e14-audit.mjs ocr --department 60 --municipality 010 --zone 00 --stand 00 --limit 3 --ocr-provider transformers --ocr-model mnist.onnx
 ```
 
 Si ya tienes un modelo ONNX compatible descargado/local:

@@ -717,11 +717,21 @@ function ocrPill(row) {
 }
 
 function trustedOcrValue(row, key) {
+  if (key === "suma_total_formulario") {
+    return row?.ocr?.consistente
+      ? (row.ocr?.suma_votos ?? row.ocr?.values?.[key] ?? "")
+      : "";
+  }
+
   return row?.ocr?.consistente ? (row.ocr?.values?.[key] ?? "") : "";
 }
 
 function rawOcrValue(row, key) {
   return row?.ocr?.fields?.[key]?.raw || "";
+}
+
+function displayOcrValue(row, key) {
+  return trustedOcrValue(row, key) || rawOcrValue(row, key);
 }
 
 function selectRecord(record) {
@@ -779,18 +789,24 @@ function renderDetail(record) {
       ["OCR", ocr.ocr?.consistente ? "Consistente" : "Requiere revision"],
       ["OCR proveedor", ocr.ocr?.proveedor ?? ""],
       ["OCR confianza", ocr.ocr?.confianza_promedio ?? ""],
+      ["OCR total E-11", trustedOcrValue(ocr, "total_votantes_e11")],
       ["OCR total urna", trustedOcrValue(ocr, "total_votos_urna")],
+      ["OCR incinerados", trustedOcrValue(ocr, "total_votos_incinerados")],
       ["OCR candidato 1", trustedOcrValue(ocr, "candidato_1")],
       ["OCR candidato 2", trustedOcrValue(ocr, "candidato_2")],
       ["OCR blanco", trustedOcrValue(ocr, "votos_blanco")],
       ["OCR nulos", trustedOcrValue(ocr, "votos_nulos")],
       ["OCR no marcados", trustedOcrValue(ocr, "votos_no_marcados")],
+      ["OCR suma form.", trustedOcrValue(ocr, "suma_total_formulario")],
+      ["OCR raw E-11", rawOcrValue(ocr, "total_votantes_e11")],
       ["OCR raw total", rawOcrValue(ocr, "total_votos_urna")],
+      ["OCR raw inc.", rawOcrValue(ocr, "total_votos_incinerados")],
       ["OCR raw C1", rawOcrValue(ocr, "candidato_1")],
       ["OCR raw C2", rawOcrValue(ocr, "candidato_2")],
       ["OCR raw blanco", rawOcrValue(ocr, "votos_blanco")],
       ["OCR raw nulos", rawOcrValue(ocr, "votos_nulos")],
       ["OCR raw no marc.", rawOcrValue(ocr, "votos_no_marcados")],
+      ["OCR raw suma form.", rawOcrValue(ocr, "suma_total_formulario")],
       ["OCR suma", ocr.ocr?.suma_votos ?? ""],
       ["OCR diferencia", ocr.ocr?.diferencia_total_urna ?? ""],
       ["OCR error", ocr.error || ""],
@@ -1022,12 +1038,15 @@ function openOcrDetailModal() {
       tr.innerHTML = `
         <td>${escapeHtml(row.departmentName)} / ${escapeHtml(row.municipalityName)}<br><span class="mono">${escapeHtml(row.zoneName)} / ${escapeHtml(row.standName)}</span></td>
         <td>${escapeHtml(row.table)}</td>
-        <td>${escapeHtml(trustedOcrValue(row, "total_votos_urna"))}</td>
-        <td>${escapeHtml(trustedOcrValue(row, "candidato_1"))}</td>
-        <td>${escapeHtml(trustedOcrValue(row, "candidato_2"))}</td>
-        <td>${escapeHtml(trustedOcrValue(row, "votos_blanco"))}</td>
-        <td>${escapeHtml(trustedOcrValue(row, "votos_nulos"))}</td>
-        <td>${escapeHtml(trustedOcrValue(row, "votos_no_marcados"))}</td>
+        <td>${escapeHtml(displayOcrValue(row, "total_votantes_e11"))}</td>
+        <td>${escapeHtml(displayOcrValue(row, "total_votos_urna"))}</td>
+        <td>${escapeHtml(displayOcrValue(row, "total_votos_incinerados"))}</td>
+        <td>${escapeHtml(displayOcrValue(row, "candidato_1"))}</td>
+        <td>${escapeHtml(displayOcrValue(row, "candidato_2"))}</td>
+        <td>${escapeHtml(displayOcrValue(row, "votos_blanco"))}</td>
+        <td>${escapeHtml(displayOcrValue(row, "votos_nulos"))}</td>
+        <td>${escapeHtml(displayOcrValue(row, "votos_no_marcados"))}</td>
+        <td>${escapeHtml(displayOcrValue(row, "suma_total_formulario"))}</td>
         <td>${escapeHtml(row.ocr?.diferencia_total_urna ?? "")}</td>
         <td>${escapeHtml(row.ocr?.proveedor ?? "")}</td>
         <td>${row.ocr?.consistente ? "Consistente" : row.error ? "Error" : "Revision"}</td>

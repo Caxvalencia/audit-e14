@@ -266,12 +266,15 @@
               <tr>
                 <th>Ubicación</th>
                 <th>Mesa</th>
+                <th>E-11</th>
                 <th>Total val.</th>
+                <th>Inc.</th>
                 <th>C1 val.</th>
                 <th>C2 val.</th>
                 <th>Blanco val.</th>
                 <th>Nulos val.</th>
                 <th>No marc. val.</th>
+                <th>Suma form.</th>
                 <th>Dif.</th>
                 <th>Motor</th>
                 <th>Estado</th>
@@ -377,13 +380,13 @@
         <label style="display: none;">
           OCR votos
           <select id="ocrProvider">
-            <option value="transformers">Transformers.js local</option>
-            <option value="tesseract" selected>Tesseract numerico</option>
+            <option value="transformers" selected>ONNX local manuscrito</option>
+            <option value="tesseract">Tesseract numerico</option>
           </select>
 
           <small class="field-help">
-            Transformers.js clasifica digitos manuscritos localmente. Tesseract
-            queda disponible para comparar texto numerico.
+            ONNX clasifica digitos manuscritos localmente. Tesseract queda
+            disponible para comparar texto numerico.
           </small>
         </label>
 
@@ -392,8 +395,8 @@
           <input id="ocrModel" type="text" value="" />
 
           <small class="field-help">
-            Usa un modelo compatible con Transformers.js o una ruta local
-            convertida a ONNX.
+            Usa mnist.onnx, un archivo ONNX local o un modelo propio entrenado
+            con recortes E-14.
           </small>
         </label>
 
