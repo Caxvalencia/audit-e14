@@ -6,6 +6,7 @@ config.json
 output/
 dist/
 *.log
+digit-gate/**/manifest.csv
 
 # Local browser/test artifacts
 .playwright-cli/

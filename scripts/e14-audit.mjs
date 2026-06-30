@@ -6,11 +6,13 @@ import {
   existsSync,
   mkdtempSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { PDFDocument } from "pdf-lib";
@@ -68,6 +70,10 @@ function parseArgs(argv) {
     ocrProvider: "transformers",
     ocrModel: "",
     ocrLocalOnly: false,
+    debugDir: "",
+    digitGateModel: "",
+    digitGateThreshold: 0.45,
+    epochs: 500,
     baseUrl: DEFAULT_BASE_URL,
   };
 
@@ -94,6 +100,11 @@ function parseArgs(argv) {
     else if (a === "--ocr-provider") args.ocrProvider = next();
     else if (a === "--ocr-model") args.ocrModel = next();
     else if (a === "--ocr-local-only") args.ocrLocalOnly = true;
+    else if (a === "--debug-dir") args.debugDir = next();
+    else if (a === "--digit-gate-model") args.digitGateModel = next();
+    else if (a === "--digit-gate-threshold")
+      args.digitGateThreshold = Number(next());
+    else if (a === "--epochs") args.epochs = Number(next());
     else if (a === "--help" || a === "-h") args.command = "help";
     else throw new Error(`Unknown argument: ${a}`);
   }
@@ -2117,6 +2128,393 @@ function preprocessMnistDigitToTensor(pixels, component) {
   return data;
 }
 
+const digitGateModels = new Map();
+let tfPromise = null;
+
+function defaultDigitGateModelPath(args = {}) {
+  return join(args.out || DEFAULT_OUT, "models", "digit-gate.json");
+}
+
+function digitGateFeatureVectorFromPng(png, grid = 32) {
+  const features = new Array(grid * grid).fill(0);
+  const counts = new Array(grid * grid).fill(0);
+
+  for (let y = 0; y < png.height; y++) {
+    for (let x = 0; x < png.width; x++) {
+      const index = (png.width * y + x) << 2;
+      const gray =
+        png.data[index] * 0.299 +
+        png.data[index + 1] * 0.587 +
+        png.data[index + 2] * 0.114;
+      const gx = Math.min(grid - 1, Math.floor((x / png.width) * grid));
+      const gy = Math.min(grid - 1, Math.floor((y / png.height) * grid));
+      const featureIndex = gy * grid + gx;
+      features[featureIndex] += gray / 255;
+      counts[featureIndex]++;
+    }
+  }
+
+  return features.map((value, index) =>
+    counts[index] ? value / counts[index] : 0,
+  );
+}
+
+function digitGateFeatureVectorFromComponent(pixels, component, grid = 32) {
+  const tmp = new PNG({ width: 64, height: 64 });
+  for (let i = 0; i < tmp.data.length; i += 4) {
+    tmp.data[i] = 0;
+    tmp.data[i + 1] = 0;
+    tmp.data[i + 2] = 0;
+    tmp.data[i + 3] = 255;
+  }
+
+  const padding = 10;
+  const scale = Math.min(
+    (tmp.width - padding * 2) / component.width,
+    (tmp.height - padding * 2) / component.height,
+  );
+  const targetWidth = Math.max(1, Math.round(component.width * scale));
+  const targetHeight = Math.max(1, Math.round(component.height * scale));
+  const offsetX = Math.floor((tmp.width - targetWidth) / 2);
+  const offsetY = Math.floor((tmp.height - targetHeight) / 2);
+
+  for (let y = component.minY; y <= component.maxY; y++) {
+    for (let x = component.minX; x <= component.maxX; x++) {
+      if (!pixels[y][x]) continue;
+      const tx = Math.min(
+        tmp.width - 1,
+        Math.max(
+          0,
+          offsetX +
+            Math.floor(((x - component.minX) / component.width) * targetWidth),
+        ),
+      );
+      const ty = Math.min(
+        tmp.height - 1,
+        Math.max(
+          0,
+          offsetY +
+            Math.floor(
+              ((y - component.minY) / component.height) * targetHeight,
+            ),
+        ),
+      );
+
+      for (
+        let yy = Math.max(0, ty - 1);
+        yy <= Math.min(tmp.height - 1, ty + 1);
+        yy++
+      ) {
+        for (
+          let xx = Math.max(0, tx - 1);
+          xx <= Math.min(tmp.width - 1, tx + 1);
+          xx++
+        ) {
+          const index = (tmp.width * yy + xx) << 2;
+          tmp.data[index] = 255;
+          tmp.data[index + 1] = 255;
+          tmp.data[index + 2] = 255;
+          tmp.data[index + 3] = 255;
+        }
+      }
+    }
+  }
+
+  return digitGateFeatureVectorFromPng(tmp, grid);
+}
+
+function sigmoid(value) {
+  if (value < -40) return 0;
+  if (value > 40) return 1;
+  return 1 / (1 + Math.exp(-value));
+}
+
+function predictDigitGate(model, features) {
+  let score = model.bias || 0;
+  for (let i = 0; i < model.weights.length; i++) {
+    score += model.weights[i] * (features[i] || 0);
+  }
+  return sigmoid(score);
+}
+
+async function loadTensorFlowForDigitGate() {
+  if (!tfPromise) {
+    tfPromise = import("@tensorflow/tfjs-node")
+      .catch(() => import("@tensorflow/tfjs"))
+      .then((module) => module.default || module);
+  }
+
+  const tf = await tfPromise;
+  await tf.ready();
+  return tf;
+}
+
+function componentToDigitGateTensorData(pixels, component, imageSize = 64) {
+  const data = new Float32Array(imageSize * imageSize);
+  const padding = 10;
+  const scale = Math.min(
+    (imageSize - padding * 2) / component.width,
+    (imageSize - padding * 2) / component.height,
+  );
+  const targetWidth = Math.max(1, Math.round(component.width * scale));
+  const targetHeight = Math.max(1, Math.round(component.height * scale));
+  const offsetX = Math.floor((imageSize - targetWidth) / 2);
+  const offsetY = Math.floor((imageSize - targetHeight) / 2);
+
+  for (let y = component.minY; y <= component.maxY; y++) {
+    for (let x = component.minX; x <= component.maxX; x++) {
+      if (!pixels[y][x]) continue;
+
+      const tx = Math.min(
+        imageSize - 1,
+        Math.max(
+          0,
+          offsetX +
+            Math.floor(((x - component.minX) / component.width) * targetWidth),
+        ),
+      );
+      const ty = Math.min(
+        imageSize - 1,
+        Math.max(
+          0,
+          offsetY +
+            Math.floor(
+              ((y - component.minY) / component.height) * targetHeight,
+            ),
+        ),
+      );
+
+      for (
+        let yy = Math.max(0, ty - 1);
+        yy <= Math.min(imageSize - 1, ty + 1);
+        yy++
+      ) {
+        for (
+          let xx = Math.max(0, tx - 1);
+          xx <= Math.min(imageSize - 1, tx + 1);
+          xx++
+        ) {
+          data[yy * imageSize + xx] = 1;
+        }
+      }
+    }
+  }
+
+  return data;
+}
+
+async function loadTfjsLayersModelFromDisk(tf, modelDir) {
+  const modelJson = JSON.parse(readFileSync(join(modelDir, "model.json"), "utf8"));
+  const manifest = modelJson.weightsManifest?.[0];
+  if (!manifest) throw new Error(`Modelo TFJS sin weightsManifest: ${modelDir}`);
+
+  const weightData = readFileSync(join(modelDir, manifest.paths[0]));
+  return tf.loadLayersModel(
+    tf.io.fromMemory({
+      modelTopology: modelJson.modelTopology,
+      weightSpecs: manifest.weights,
+      weightData: weightData.buffer.slice(
+        weightData.byteOffset,
+        weightData.byteOffset + weightData.byteLength,
+      ),
+    }),
+  );
+}
+
+async function getDigitGateModel(args = {}) {
+  if (!args.digitGateModel) return null;
+
+  const modelPath = args.digitGateModel;
+  if (!existsSync(modelPath)) return null;
+
+  if (!digitGateModels.has(modelPath)) {
+    const stat = statSync(modelPath);
+    if (stat.isDirectory() && existsSync(join(modelPath, "model.json"))) {
+      const tf = await loadTensorFlowForDigitGate();
+      const model = await loadTfjsLayersModelFromDisk(tf, modelPath);
+      const metadataPath = join(modelPath, "metadata.json");
+      const metadata = existsSync(metadataPath)
+        ? JSON.parse(readFileSync(metadataPath, "utf8"))
+        : {};
+      digitGateModels.set(modelPath, {
+        type: "tfjs",
+        tf,
+        model,
+        threshold: metadata.threshold ?? 0.5,
+        imageSize: metadata.imageSize ?? 64,
+      });
+    } else {
+      digitGateModels.set(modelPath, {
+        type: "logreg",
+        ...JSON.parse(readFileSync(modelPath, "utf8")),
+      });
+    }
+  }
+
+  return digitGateModels.get(modelPath);
+}
+
+async function predictDigitGateProbability(gate, pixels, component) {
+  if (!gate) return 1;
+
+  if (gate.type === "tfjs") {
+    const data = componentToDigitGateTensorData(
+      pixels,
+      component,
+      gate.imageSize || 64,
+    );
+    const input = gate.tf.tensor4d(data, [
+      1,
+      gate.imageSize || 64,
+      gate.imageSize || 64,
+      1,
+    ]);
+    const output = gate.model.predict(input);
+    const values = await output.data();
+    input.dispose();
+    output.dispose();
+    return values[0];
+  }
+
+  return predictDigitGate(
+    gate,
+    digitGateFeatureVectorFromComponent(
+      pixels,
+      component,
+      gate.featureGrid || 32,
+    ),
+  );
+}
+
+function walkPngFiles(dir, output = []) {
+  if (!dir || !existsSync(dir)) return output;
+
+  for (const entry of readdirSync(dir)) {
+    const fullPath = join(dir, entry);
+    const stat = statSync(fullPath);
+    if (stat.isDirectory()) {
+      walkPngFiles(fullPath, output);
+    } else if (entry.endsWith(".png")) {
+      output.push(fullPath);
+    }
+  }
+
+  return output;
+}
+
+function digitGateLabelFromFile(file) {
+  const name = basename(file);
+  if (!/-digit-\d+/.test(name)) return null;
+  if (name.includes("-as-zero") || name.includes("-rejected")) return 0;
+  return 1;
+}
+
+function loadDigitGateTrainingSamples(debugDir) {
+  const samples = [];
+  const positiveDir = join(debugDir, "positive");
+  const negativeDir = join(debugDir, "negative");
+
+  if (existsSync(positiveDir) || existsSync(negativeDir)) {
+    for (const [dir, label] of [
+      [positiveDir, 1],
+      [negativeDir, 0],
+    ]) {
+      for (const file of walkPngFiles(dir)) {
+        const png = PNG.sync.read(readFileSync(file));
+        samples.push({
+          file,
+          label,
+          features: digitGateFeatureVectorFromPng(png),
+        });
+      }
+    }
+
+    return samples;
+  }
+
+  const files = walkPngFiles(debugDir);
+  const negativeBases = new Set(
+    files
+      .map((file) => relative(debugDir, file))
+      .filter((name) => name.includes("-as-zero") || name.includes("-rejected"))
+      .map((name) => name.replace(/-(as-zero|rejected)\.png$/, ".png")),
+  );
+
+  for (const file of files) {
+    const name = relative(debugDir, file);
+    const label = digitGateLabelFromFile(file);
+    if (label === null) continue;
+    if (label === 1 && negativeBases.has(name)) continue;
+
+    const png = PNG.sync.read(readFileSync(file));
+    samples.push({
+      file,
+      label,
+      features: digitGateFeatureVectorFromPng(png),
+    });
+  }
+
+  return samples;
+}
+
+function trainDigitGateModel(samples, args = {}) {
+  const featureCount = samples[0]?.features?.length || 0;
+  const weights = new Array(featureCount).fill(0);
+  let bias = 0;
+  const epochs = Number(args.epochs || 500);
+  const learningRate = Number(args.learningRate || 0.12);
+  const l2 = Number(args.l2 || 0.0005);
+
+  for (let epoch = 0; epoch < epochs; epoch++) {
+    for (const sample of samples) {
+      const prediction = predictDigitGate({ weights, bias }, sample.features);
+      const error = prediction - sample.label;
+
+      for (let i = 0; i < weights.length; i++) {
+        weights[i] -=
+          learningRate * (error * sample.features[i] + l2 * weights[i]);
+      }
+      bias -= learningRate * error;
+    }
+  }
+
+  return {
+    type: "e14-digit-gate-logreg",
+    version: 1,
+    featureGrid: 32,
+    positiveLabel: "digit",
+    negativeLabel: "non-digit-or-zero-marker",
+    threshold: Number(args.digitGateThreshold || 0.45),
+    weights,
+    bias,
+    trainedAt: new Date().toISOString(),
+    samples: samples.length,
+    positives: samples.filter((sample) => sample.label === 1).length,
+    negatives: samples.filter((sample) => sample.label === 0).length,
+  };
+}
+
+function evaluateDigitGateModel(model, samples) {
+  let correct = 0;
+  let fp = 0;
+  let fn = 0;
+
+  for (const sample of samples) {
+    const probability = predictDigitGate(model, sample.features);
+    const predicted = probability >= model.threshold ? 1 : 0;
+    if (predicted === sample.label) correct++;
+    else if (predicted === 1) fp++;
+    else fn++;
+  }
+
+  return {
+    accuracy: samples.length ? correct / samples.length : 0,
+    correct,
+    falsePositive: fp,
+    falseNegative: fn,
+  };
+}
+
 async function runTransformersDigitOcr(image, dir, field, args = {}) {
   const png = PNG.sync.read(readFileSync(image));
   const pixels = binarizePng(png);
@@ -2128,6 +2526,7 @@ async function runTransformersDigitOcr(image, dir, field, args = {}) {
 
   const session = await getOnnxSession(args);
   const reads = [];
+  const digitGate = await getDigitGateModel(args);
 
   for (let i = 0; i < components.length; i++) {
     const digitFile = join(dir, `${field.key}-digit-${i + 1}.png`);
@@ -2146,6 +2545,28 @@ async function runTransformersDigitOcr(image, dir, field, args = {}) {
       }
       reads.push({ digit: "0", score: 0.95 });
       continue;
+    }
+
+    if (digitGate) {
+      const probability = await predictDigitGateProbability(
+        digitGate,
+        pixels,
+        components[i],
+      );
+
+      if (
+        probability < (args.digitGateThreshold || digitGate.threshold || 0.45)
+      ) {
+        writeMnistDigitImage(pixels, components[i], digitFile);
+        if (args.keepOcrImages && args.debugDir) {
+          keepOcrDebugImage(
+            digitFile,
+            args.debugDir,
+            `${field.key}-digit-${i + 1}-rejected.png`,
+          );
+        }
+        continue;
+      }
     }
 
     writeMnistDigitImage(pixels, components[i], digitFile);
@@ -3162,12 +3583,49 @@ function appendJsonl(path, row) {
   createWriteStream(path, { flags: "a" }).end(JSON.stringify(row) + "\n");
 }
 
+function runDigitGateTraining(args) {
+  const debugDir = args.debugDir || join(args.out || DEFAULT_OUT, "ocr-debug");
+  const modelPath = args.digitGateModel || defaultDigitGateModelPath(args);
+  const samples = loadDigitGateTrainingSamples(debugDir);
+  const positives = samples.filter((sample) => sample.label === 1).length;
+  const negatives = samples.length - positives;
+
+  if (!samples.length) {
+    throw new Error(
+      `No se encontraron PNG de entrenamiento en ${debugDir}. Ejecuta OCR con --keep-ocr-images primero.`,
+    );
+  }
+
+  if (!positives || !negatives) {
+    throw new Error(
+      `El dataset necesita positivos y negativos. Encontrados: positivos=${positives}, negativos=${negatives}.`,
+    );
+  }
+
+  const model = trainDigitGateModel(samples, args);
+  const metrics = evaluateDigitGateModel(model, samples);
+
+  ensureDir(dirname(modelPath));
+  writeFileSync(modelPath, JSON.stringify({ ...model, metrics }, null, 2));
+
+  console.log(`Digit gate samples: ${samples.length}`);
+  console.log(`  positivos: ${positives}`);
+  console.log(`  negativos: ${negatives}`);
+  console.log(
+    `  accuracy entrenamiento: ${(metrics.accuracy * 100).toFixed(2)}%`,
+  );
+  console.log(`  falsos positivos: ${metrics.falsePositive}`);
+  console.log(`  falsos negativos: ${metrics.falseNegative}`);
+  console.log(`Digit gate model: ${modelPath}`);
+}
+
 function usage() {
   console.log(`Usage:
   node scripts/e14-audit.mjs inventory [filters]
   node scripts/e14-audit.mjs download [filters]
   node scripts/e14-audit.mjs verify [filters]
   node scripts/e14-audit.mjs ocr [filters]
+  node scripts/e14-audit.mjs train-digit-gate --debug-dir output/e14/ocr-debug
 
 Filters:
   --department 60        Departamento, 2 digits after padding
@@ -3186,6 +3644,14 @@ Filters:
                          OCR provider: transformers or tesseract
   --ocr-model MODEL      Transformers.js model id or local ONNX model path
   --ocr-local-only       Do not download remote Transformers.js model files
+  --digit-gate-model FILE
+                         JSON logreg file or TensorFlow.js model folder for
+                         filtering non-digit crops before MNIST
+  --digit-gate-threshold 0.45
+                         Minimum digit probability before running MNIST
+  --debug-dir DIR        OCR debug folder used by train-digit-gate. If it has
+                         positive/ and negative/ subfolders, those labels are used
+  --epochs 500           Training epochs for train-digit-gate
 `);
 }
 
@@ -3194,6 +3660,11 @@ async function main() {
     const args = parseArgs(process.argv);
 
     if (args.command === "help") return usage();
+
+    if (args.command === "train-digit-gate") {
+      runDigitGateTraining(args);
+      return;
+    }
 
     if (!["inventory", "download", "verify", "ocr"].includes(args.command))
       throw new Error(`Unknown command: ${args.command}`);
