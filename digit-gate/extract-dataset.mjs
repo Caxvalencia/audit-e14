@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import {
   cleanDir,
   copySample,
+  datasetSamples,
   deterministicBucket,
   duplicateNegativeBases,
   ensureDir,
@@ -56,7 +57,20 @@ for (const dir of [dataset, testDataset].filter(Boolean)) {
 }
 
 const files = walkPngFiles(source);
-const negativeBases = duplicateNegativeBases(source, files);
+const isCuratedSource =
+  existsSync(join(source, "positive")) || existsSync(join(source, "negative"));
+const sourceSamples = isCuratedSource
+  ? datasetSamples(source).map((sample) => ({
+      file: sample.file,
+      label: sample.label === 1 ? "positive" : "negative",
+      relativePath: relative(source, sample.file),
+    }))
+  : files.map((file) => ({
+      file,
+      label: labelFromDebugDigit(file),
+      relativePath: relative(source, file),
+    }));
+const negativeBases = isCuratedSource ? new Set() : duplicateNegativeBases(source, files);
 const rows = [];
 const counts = {
   positive: 0,
@@ -66,10 +80,8 @@ const counts = {
   testNegative: 0,
 };
 
-for (const file of files) {
-  const relativePath = relative(source, file);
-  const label = labelFromDebugDigit(file);
-
+for (const sample of sourceSamples) {
+  const { file, label, relativePath } = sample;
   if (!label) {
     counts.skipped++;
     continue;

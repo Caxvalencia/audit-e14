@@ -1705,8 +1705,9 @@ function digitComponents(pixels, width, height) {
       .sort((a, b) => a.minX - b.minX),
   );
 
-  return splitTouchingDigitComponents(pixels, merged).sort(
-    (a, b) => a.minX - b.minX,
+  return reduceComponentsToMaxDigits(
+    splitTouchingDigitComponents(pixels, merged).sort((a, b) => a.minX - b.minX),
+    3,
   );
 }
 
@@ -1721,13 +1722,23 @@ function mergeDigitFragments(components) {
     }
 
     const gap = component.minX - previous.maxX - 1;
+    const xOverlap =
+      Math.min(previous.maxX, component.maxX) -
+      Math.max(previous.minX, component.minX) +
+      1;
     const yOverlap =
       Math.min(previous.maxY, component.maxY) -
       Math.max(previous.minY, component.minY) +
       1;
     const hasSmallFragment = Math.min(previous.area, component.area) < 120;
+    const hasHorizontalOverlap =
+      xOverlap > 0 &&
+      xOverlap >= Math.min(previous.width, component.width) * 0.35;
 
-    if (hasSmallFragment && gap <= 8 && yOverlap > 0) {
+    if (
+      yOverlap > 0 &&
+      (hasHorizontalOverlap || (hasSmallFragment && gap <= 8))
+    ) {
       previous.minX = Math.min(previous.minX, component.minX);
       previous.maxX = Math.max(previous.maxX, component.maxX);
       previous.minY = Math.min(previous.minY, component.minY);
@@ -1753,6 +1764,46 @@ function splitTouchingDigitComponents(pixels, components) {
   }
 
   return output;
+}
+
+function reduceComponentsToMaxDigits(components, maxDigits) {
+  const reduced = components.map((component) => ({ ...component }));
+
+  while (reduced.length > maxDigits) {
+    let bestIndex = 0;
+    let bestScore = Infinity;
+
+    for (let i = 0; i < reduced.length - 1; i++) {
+      const left = reduced[i];
+      const right = reduced[i + 1];
+      const gap = Math.max(0, right.minX - left.maxX - 1);
+      const yOverlap =
+        Math.min(left.maxY, right.maxY) - Math.max(left.minY, right.minY) + 1;
+      const smallPenalty = Math.min(left.area, right.area) < 180 ? -8 : 0;
+      const overlapBonus = yOverlap > 0 ? -6 : 0;
+      const score = gap + smallPenalty + overlapBonus;
+
+      if (score < bestScore) {
+        bestScore = score;
+        bestIndex = i;
+      }
+    }
+
+    const left = reduced[bestIndex];
+    const right = reduced[bestIndex + 1];
+    const merged = {
+      minX: Math.min(left.minX, right.minX),
+      maxX: Math.max(left.maxX, right.maxX),
+      minY: Math.min(left.minY, right.minY),
+      maxY: Math.max(left.maxY, right.maxY),
+      area: left.area + right.area,
+    };
+    merged.width = merged.maxX - merged.minX + 1;
+    merged.height = merged.maxY - merged.minY + 1;
+    reduced.splice(bestIndex, 2, merged);
+  }
+
+  return reduced;
 }
 
 function splitWideComponent(pixels, component, depth = 0) {
@@ -1942,6 +1993,18 @@ function bestDigitPredictionFromOnnx(outputData) {
   };
 }
 
+async function predictOnnxDigit(session, pixels, component) {
+  const floatData = preprocessMnistDigitToTensor(pixels, component);
+  const ort = await loadOnnxRuntime();
+  const inputTensor = new ort.Tensor("float32", floatData, [1, 1, 28, 28]);
+
+  const feeds = { [session.inputNames[0]]: inputTensor };
+  const results = await session.run(feeds);
+  const outputData = results[session.outputNames[0]].data;
+
+  return bestDigitPredictionFromOnnx(outputData);
+}
+
 async function downloadMnistModelIfMissing(destPath) {
   if (existsSync(destPath)) return;
 
@@ -2049,10 +2112,19 @@ function isAsterisk(pixels, component) {
     density >= 0.16 &&
     density <= 0.33 &&
     minProp >= 0.1;
+  const isDenseBalancedStar =
+    component.area >= 600 &&
+    aspect >= 0.62 &&
+    aspect <= 1.08 &&
+    density >= 0.34 &&
+    density <= 0.58 &&
+    minProp >= 0.18 &&
+    Math.max(pTL, pTR, pBL, pBR) - minProp <= 0.12;
 
   // Asterisco (*) o cruz (X) usados como cero a la izquierda en E-14.
   return (
     isLargeStar ||
+    isDenseBalancedStar ||
     (minProp >= 0.16 && aspect >= 0.78 && aspect <= 1.35 && density > 0.42)
   );
 }
@@ -2530,11 +2602,15 @@ async function runTransformersDigitOcr(image, dir, field, args = {}) {
 
   for (let i = 0; i < components.length; i++) {
     const digitFile = join(dir, `${field.key}-digit-${i + 1}.png`);
+    const compactZero = isCompactZeroMarker(
+      pixels,
+      components[i],
+      png.width,
+      png.height,
+    );
+    const asterisk = isAsterisk(pixels, components[i]);
 
-    if (
-      isCompactZeroMarker(pixels, components[i], png.width, png.height) ||
-      isAsterisk(pixels, components[i])
-    ) {
+    if (compactZero) {
       writeMnistDigitImage(pixels, components[i], digitFile);
       if (args.keepOcrImages && args.debugDir) {
         keepOcrDebugImage(
@@ -2544,6 +2620,36 @@ async function runTransformersDigitOcr(image, dir, field, args = {}) {
         );
       }
       reads.push({ digit: "0", score: 0.95 });
+      continue;
+    }
+
+    if (asterisk) {
+      const prediction = await predictOnnxDigit(session, pixels, components[i]);
+      const isConfidentOne =
+        prediction.digit === "1" && prediction.score >= 0.98;
+
+      writeMnistDigitImage(pixels, components[i], digitFile);
+
+      if (!isConfidentOne) {
+        if (args.keepOcrImages && args.debugDir) {
+          keepOcrDebugImage(
+            digitFile,
+            args.debugDir,
+            `${field.key}-digit-${i + 1}-as-zero.png`,
+          );
+        }
+        reads.push({ digit: "0", score: 0.95 });
+        continue;
+      }
+
+      if (args.keepOcrImages && args.debugDir) {
+        keepOcrDebugImage(
+          digitFile,
+          args.debugDir,
+          `${field.key}-digit-${i + 1}.png`,
+        );
+      }
+      reads.push(prediction);
       continue;
     }
 
@@ -2579,15 +2685,7 @@ async function runTransformersDigitOcr(image, dir, field, args = {}) {
       );
     }
 
-    const floatData = preprocessMnistDigitToTensor(pixels, components[i]);
-    const ort = await loadOnnxRuntime();
-    const inputTensor = new ort.Tensor("float32", floatData, [1, 1, 28, 28]);
-
-    const feeds = { [session.inputNames[0]]: inputTensor };
-    const results = await session.run(feeds);
-    const outputData = results[session.outputNames[0]].data;
-
-    const prediction = bestDigitPredictionFromOnnx(outputData);
+    const prediction = await predictOnnxDigit(session, pixels, components[i]);
     reads.push(prediction);
   }
 
@@ -2732,6 +2830,67 @@ function normalizeOcrNumber(raw) {
   const normalized = digits.length > 3 ? digits.slice(-3) : digits;
 
   return Number(normalized);
+}
+
+const ZERO_IF_EMPTY_OCR_FIELDS = new Set([
+  "total_votos_incinerados",
+  "candidato_1",
+  "candidato_2",
+  "votos_blanco",
+  "votos_nulos",
+  "votos_no_marcados",
+]);
+
+const OCR_VOTE_KEYS = [
+  "candidato_1",
+  "candidato_2",
+  "votos_blanco",
+  "votos_nulos",
+  "votos_no_marcados",
+];
+
+function normalizeOcrFieldValue(fieldKey, read) {
+  if (ZERO_IF_EMPTY_OCR_FIELDS.has(fieldKey) && !String(read.raw || "").trim()) {
+    read.raw = "000";
+    read.defaultedFromEmpty = true;
+    return 0;
+  }
+
+  return normalizeOcrNumber(read.raw);
+}
+
+function reconcileOcrVoteValues(values, fields) {
+  const total = values.total_votos_urna;
+  if (!Number.isFinite(total)) return;
+  if (OCR_VOTE_KEYS.some((key) => !Number.isFinite(values[key]))) return;
+
+  const sum = OCR_VOTE_KEYS.reduce((acc, key) => acc + values[key], 0);
+  const delta = total - sum;
+  if (!delta || Math.abs(delta) > 9) return;
+
+  const candidates = OCR_VOTE_KEYS.filter((key) => {
+    const current = values[key];
+    const adjusted = current + delta;
+    const raw = String(fields[key]?.raw || "");
+
+    return (
+      Number.isFinite(current) &&
+      adjusted >= 0 &&
+      adjusted <= total &&
+      !fields[key]?.defaultedFromEmpty &&
+      /^\d{1,3}$/.test(raw) &&
+      !/^0+$/.test(raw) &&
+      raw.endsWith("0")
+    );
+  });
+
+  if (candidates.length !== 1) return;
+
+  const key = candidates[0];
+  fields[key].correctedFrom = values[key];
+  fields[key].correctionReason = "vote_sum_delta";
+  fields[key].value = values[key] + delta;
+  values[key] = fields[key].value;
 }
 
 function emptyOcrValues() {
@@ -3040,7 +3199,7 @@ async function ocrOne(record, out, args = {}) {
         ...args,
         debugDir,
       });
-      const value = normalizeOcrNumber(read.raw);
+      const value = normalizeOcrFieldValue(field.key, read);
       values[field.key] = value;
       fields[field.key] = {
         label: field.label,
@@ -3048,6 +3207,7 @@ async function ocrOne(record, out, args = {}) {
         value,
         confidence: read.confidence,
         provider: read.provider,
+        defaultedFromEmpty: read.defaultedFromEmpty || false,
         tesseract: read.tesseract,
         ai: read.ai,
         error: read.error,
@@ -3056,6 +3216,7 @@ async function ocrOne(record, out, args = {}) {
       confidences.push(read.confidence);
     }
 
+    reconcileOcrVoteValues(values, fields);
     const validation = validateOcrValues(values, confidences);
 
     return {

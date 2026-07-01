@@ -44,6 +44,12 @@ El extractor clasifica automáticamente:
 - `*-digit-N-as-zero.png` y `*-digit-N-rejected.png` como `negative/`.
 
 Después revisa manualmente las carpetas y mueve lo que esté mal.
+Una vez curado, la carpeta manda: `train.mjs` y `test.mjs` ignoran el nombre del
+archivo y usan solo `positive/` o `negative/` como etiqueta. Si moviste un
+`*-as-zero.png` a `positive/`, se entrena como positivo.
+
+Si usas `extract-dataset.mjs` con una fuente que ya tiene `positive/` y
+`negative/`, tambien respeta esas carpetas e ignora los sufijos del nombre.
 
 ## 2. Entrenar
 
@@ -53,11 +59,13 @@ node digit-gate/train.mjs \
   --model-out ~/Documents/audit-e14/models/digit-gate-tfjs \
   --epochs 25 \
   --batch-size 32 \
+  --threshold 0.01 \
   --architecture mlp
 ```
 
 Si `@tensorflow/tfjs-node` está disponible, se usa ese backend. Si no, cae a `@tensorflow/tfjs` en CPU JS.
 `mlp` es el default porque entrena rápido en CPU; `--architecture cnn` queda disponible cuando el backend nativo esté funcionando.
+El `--threshold` queda guardado en `metadata.json` y el OCR principal lo usa como default si no pasas `--digit-gate-threshold`.
 
 ## 3. Evaluar con dataset de test
 

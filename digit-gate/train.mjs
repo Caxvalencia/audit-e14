@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import {
   IMAGE_SIZE,
   datasetSamples,
@@ -25,6 +26,7 @@ Options:
   --batch-size 32        Batch size
   --validation-ratio 0.15
   --learning-rate 0.001
+  --threshold 0.01      Default probability threshold stored in metadata
   --architecture mlp    mlp or cnn
 `);
 }
@@ -89,11 +91,13 @@ if (args.help || args.h) {
 
 const dataset = args.dataset || "digit-gate/dataset-digit-gate";
 const modelOut =
-  args.modelOut || "~/Documents/audit-e14/models/digit-gate-tfjs";
+  args.modelOut ||
+  join(homedir(), "Documents", "audit-e14", "models", "digit-gate-tfjs");
 const epochs = Number(args.epochs || 25);
 const batchSize = Number(args.batchSize || 32);
 const validationRatio = Number(args.validationRatio || 0.15);
 const learningRate = Number(args.learningRate || 0.001);
+const threshold = Number(args.threshold ?? 0.01);
 const architecture = args.architecture || "mlp";
 
 const samples = datasetSamples(dataset);
@@ -149,7 +153,7 @@ writeFileSync(
     {
       type: "e14-digit-gate-tfjs",
       imageSize: IMAGE_SIZE,
-      threshold: 0.5,
+      threshold,
       trainedAt: new Date().toISOString(),
       backend,
       samples: samples.length,
